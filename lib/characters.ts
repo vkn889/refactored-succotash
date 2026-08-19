@@ -1,10 +1,10 @@
 import type { CharacterConfig } from "./types";
 
 // The full Mog Off roster (PRD 6.2 / SRD sec 5). Stats, moves, and visual
-// params are data-driven so the shared combat resolver, character rig
-// builder, and arena builder work for all twelve without new code paths.
-// Combat is hand-to-hand only (no weapon inventory) — per-character feel
-// comes from `build` (see BUILD_POWER in lib/combat.ts) plus the special.
+// params are data-driven so the shared combat resolver and stage builder
+// work for all twelve without new code paths. Combat is punch/kick/block/
+// jump plus one elemental special per character — per-character feel comes
+// from `build` (see BUILD_POWER in lib/combat.ts) plus the special.
 export const CHARACTERS: Record<string, CharacterConfig> = {
   gautham: {
     id: "gautham",
@@ -14,14 +14,13 @@ export const CHARACTERS: Record<string, CharacterConfig> = {
     bio: "Thinks he's the main character. In the Mogsphere, he might actually be right.",
     health: 1000,
     build: "normal",
-    modelKey: "vanguard",
     accessory: "spikes",
     arenaId: "fire",
     voiceLine: "Burn with me!",
     introLines: ["Burn with me!", "You picked the wrong ring.", "Watch closely — this is the good part."],
     colors: { primary: "#3a160c", secondary: "#d1401f", emissive: "#ff7a1a" },
     moves: {
-      special: { damage: 220, animation: "gautham_special_chainpull", meterGain: 0, cinematic: true },
+      special: { name: "Chain Pull", damage: 220, meterGain: 0, cinematic: true },
     },
     unlockedByDefault: true,
   },
@@ -33,14 +32,13 @@ export const CHARACTERS: Record<string, CharacterConfig> = {
     bio: "Would rather win with one perfect cut than ten sloppy ones.",
     health: 1000,
     build: "normal",
-    modelKey: "ely",
     accessory: "crystal",
     arenaId: "ice",
     voiceLine: "Everything ends in silence.",
     introLines: ["Everything ends in silence.", "Make it quick, then.", "You'll feel this later. Just not for long."],
     colors: { primary: "#0e2430", secondary: "#1c3a52", emissive: "#7fe3ff" },
     moves: {
-      special: { damage: 220, animation: "garv_special_deepfreeze", meterGain: 0, cinematic: true },
+      special: { name: "Deep Freeze", damage: 220, meterGain: 0, projectile: true, cinematic: true },
     },
     unlockedByDefault: true,
   },
@@ -52,14 +50,13 @@ export const CHARACTERS: Record<string, CharacterConfig> = {
     bio: "Meditates between rounds. It works better than it should.",
     health: 1000,
     build: "normal",
-    modelKey: "ely",
     accessory: "beads",
     arenaId: "storm_zen",
     voiceLine: "Feel the current.",
     introLines: ["Feel the current.", "Breathe. This won't take long.", "I already saw how this ends."],
     colors: { primary: "#171029", secondary: "#2b2140", emissive: "#b98bff" },
     moves: {
-      special: { damage: 200, animation: "anvith_special_conduit", meterGain: 0, cinematic: true },
+      special: { name: "Conduit", damage: 200, meterGain: 0, projectile: true, cinematic: true },
     },
     unlockedByDefault: false,
   },
@@ -71,14 +68,13 @@ export const CHARACTERS: Record<string, CharacterConfig> = {
     bio: "Doesn't need an element. Just needs one good angle to close the distance.",
     health: 1150,
     build: "bulky",
-    modelKey: "ely",
     accessory: "none",
     arenaId: "concrete_arena",
     voiceLine: "Down you go!",
     introLines: ["Down you go!", "Let's skip the small talk.", "I've done this a hundred times."],
     colors: { primary: "#201c18", secondary: "#4a3226", emissive: "#ffb454" },
     moves: {
-      special: { damage: 230, animation: "ryan_special_suplex", meterGain: 0, cinematic: true },
+      special: { name: "Suplex", damage: 230, meterGain: 0, cinematic: true },
     },
     unlockedByDefault: false,
   },
@@ -90,14 +86,13 @@ export const CHARACTERS: Record<string, CharacterConfig> = {
     bio: "Talks the whole fight. You only notice when the talking stops.",
     health: 850,
     build: "slim",
-    modelKey: "ely",
     accessory: "hood",
     arenaId: "neon_alley",
     voiceLine: "Catch me if you can.",
     introLines: ["Catch me if you can.", "Oh, you're actually trying? Cute.", "Blink and it's over."],
     colors: { primary: "#140a24", secondary: "#241f38", emissive: "#ff4fd8" },
     moves: {
-      special: { damage: 200, animation: "chandan_special_afterimage", meterGain: 0, cinematic: true },
+      special: { name: "Afterimage Rush", damage: 200, meterGain: 0, cinematic: true },
     },
     unlockedByDefault: false,
   },
@@ -109,14 +104,13 @@ export const CHARACTERS: Record<string, CharacterConfig> = {
     bio: "Slow to anger. The ground gets there first.",
     health: 1300,
     build: "tank",
-    modelKey: "ely",
     accessory: "pauldron",
     arenaId: "stone_quarry",
     voiceLine: "The ground remembers.",
     introLines: ["The ground remembers.", "I've been patient long enough.", "Sit down. This won't take long."],
     colors: { primary: "#2c2416", secondary: "#55442c", emissive: "#b5ff6a" },
     moves: {
-      special: { damage: 240, animation: "elango_special_upheaval", meterGain: 0, cinematic: true },
+      special: { name: "Upheaval", damage: 240, meterGain: 0, projectile: true, cinematic: true },
     },
     unlockedByDefault: false,
   },
@@ -128,14 +122,13 @@ export const CHARACTERS: Record<string, CharacterConfig> = {
     bio: "Brought receipts, a drone, and three backup plans.",
     health: 1000,
     build: "normal",
-    modelKey: "ely",
     accessory: "visor",
     arenaId: "server_core",
     voiceLine: "Running final sequence.",
     introLines: ["Running final sequence.", "I already simulated this. I win.", "Don't take it personally."],
     colors: { primary: "#04171c", secondary: "#1b1f2a", emissive: "#43f5ff" },
     moves: {
-      special: { damage: 210, animation: "dev_special_overclock", meterGain: 0, cinematic: true },
+      special: { name: "Overclock", damage: 210, meterGain: 0, projectile: true, cinematic: true },
     },
     unlockedByDefault: false,
   },
@@ -147,14 +140,13 @@ export const CHARACTERS: Record<string, CharacterConfig> = {
     bio: "Already fought this exact fight in his head. He won that one too.",
     health: 1000,
     build: "normal",
-    modelKey: "ely",
     accessory: "chrome",
     arenaId: "mirror_hall",
     voiceLine: "I've already won this fight.",
     introLines: ["I've already won this fight.", "You'll fight exactly like I expect.", "I'm going to enjoy copying that."],
     colors: { primary: "#1c1c26", secondary: "#2e2e38", emissive: "#d9d9e8" },
     moves: {
-      special: { damage: 215, animation: "aadit_special_copycat", meterGain: 0, cinematic: true },
+      special: { name: "Copycat", damage: 215, meterGain: 0, cinematic: true },
     },
     unlockedByDefault: false,
   },
@@ -166,14 +158,13 @@ export const CHARACTERS: Record<string, CharacterConfig> = {
     bio: "Says almost nothing. The blade says the rest.",
     health: 850,
     build: "slim",
-    modelKey: "ely",
     accessory: "topknot",
     arenaId: "dojo",
     voiceLine: "One cut is enough.",
     introLines: ["One cut is enough.", "...", "Draw your weapon. I'll wait."],
     colors: { primary: "#18140f", secondary: "#1a1a22", emissive: "#e6e6f0" },
     moves: {
-      special: { damage: 260, animation: "rishi_special_iaido", meterGain: 0, cinematic: true },
+      special: { name: "Iaido", damage: 260, meterGain: 0, cinematic: true },
     },
     unlockedByDefault: false,
   },
@@ -185,14 +176,13 @@ export const CHARACTERS: Record<string, CharacterConfig> = {
     bio: "Never lands where you're looking.",
     health: 850,
     build: "slim",
-    modelKey: "ely",
     accessory: "scarf",
     arenaId: "sky_temple",
     voiceLine: "Try to keep up.",
     introLines: ["Try to keep up.", "You'll need to be faster than that.", "Let's see if you can even touch me."],
     colors: { primary: "#102420", secondary: "#1e3a34", emissive: "#baffe0" },
     moves: {
-      special: { damage: 205, animation: "ronith_special_cyclone", meterGain: 0, cinematic: true },
+      special: { name: "Cyclone", damage: 205, meterGain: 0, projectile: true, cinematic: true },
     },
     unlockedByDefault: false,
   },
@@ -204,14 +194,121 @@ export const CHARACTERS: Record<string, CharacterConfig> = {
     bio: "Too fast to block, too impatient to combo.",
     health: 1000,
     build: "normal",
-    modelKey: "ely",
     accessory: "shins",
     arenaId: "storm_ring",
     voiceLine: "Too fast, too late.",
     introLines: ["Too fast, too late.", "I'm already bored.", "Try to keep this interesting."],
     colors: { primary: "#1c1c10", secondary: "#2a2340", emissive: "#f5e642" },
     moves: {
-      special: { damage: 215, animation: "tej_special_thunderstep", meterGain: 0, cinematic: true },
+      special: { name: "Thunderstep", damage: 215, meterGain: 0, projectile: true, cinematic: true },
+    },
+    unlockedByDefault: false,
+  },
+  mohammed: {
+    id: "mohammed",
+    name: "Mohammed",
+    title: "The Anchor",
+    element: "kinetic",
+    bio: "Doesn't flinch. Never has. The fight ends when he decides it does.",
+    health: 1150,
+    build: "tank",
+    accessory: "pauldron",
+    arenaId: "concrete_arena",
+    voiceLine: "You're not moving me.",
+    introLines: ["You're not moving me.", "Take your best shot.", "This is going to take a while."],
+    colors: { primary: "#1c2420", secondary: "#3a4a40", emissive: "#3dffb8" },
+    moves: {
+      special: { name: "Iron Anchor", damage: 235, meterGain: 0, cinematic: true },
+    },
+    unlockedByDefault: false,
+  },
+  dhanuh: {
+    id: "dhanuh",
+    name: "Dhanuh",
+    title: "The Draft",
+    element: "wind",
+    bio: "Talks less than the wind does. Says more.",
+    health: 850,
+    build: "slim",
+    accessory: "scarf",
+    arenaId: "sky_temple",
+    voiceLine: "Feel the draft.",
+    introLines: ["Feel the draft.", "You'll lose sight of me.", "Let's move."],
+    colors: { primary: "#1a2620", secondary: "#2e4a3a", emissive: "#9dffe0" },
+    moves: {
+      special: { name: "Tailwind", damage: 200, meterGain: 0, projectile: true, cinematic: true },
+    },
+    unlockedByDefault: false,
+  },
+  srinath: {
+    id: "srinath",
+    name: "Srinath",
+    title: "The Signal",
+    element: "tech",
+    bio: "Reads the fight three moves ahead. Still gets hit sometimes.",
+    health: 1000,
+    build: "normal",
+    accessory: "visor",
+    arenaId: "server_core",
+    voiceLine: "Signal locked.",
+    introLines: ["Signal locked.", "Running the numbers.", "This won't take long."],
+    colors: { primary: "#0c1a24", secondary: "#1e3a4a", emissive: "#4dd9ff" },
+    moves: {
+      special: { name: "Uplink", damage: 210, meterGain: 0, projectile: true, cinematic: true },
+    },
+    unlockedByDefault: false,
+  },
+  vaishnav: {
+    id: "vaishnav",
+    name: "Vaishnav",
+    title: "The Surge",
+    element: "lightning",
+    bio: "Doesn't wait for an opening. Makes one.",
+    health: 1000,
+    build: "normal",
+    accessory: "shins",
+    arenaId: "storm_ring",
+    voiceLine: "Here it comes.",
+    introLines: ["Here it comes.", "No warning shots.", "Brace yourself."],
+    colors: { primary: "#241c10", secondary: "#4a3820", emissive: "#ffd23d" },
+    moves: {
+      special: { name: "Surge", damage: 215, meterGain: 0, projectile: true, cinematic: true },
+    },
+    unlockedByDefault: false,
+  },
+  ram: {
+    id: "ram",
+    name: "Ram",
+    title: "The Guard",
+    element: "steel",
+    bio: "Trained for years to make this look effortless. It isn't.",
+    health: 1050,
+    build: "bulky",
+    accessory: "chrome",
+    arenaId: "dojo",
+    voiceLine: "Stand your ground.",
+    introLines: ["Stand your ground.", "I won't ask twice.", "Guard up."],
+    colors: { primary: "#1c1c1c", secondary: "#3a3a3e", emissive: "#c9c9d9" },
+    moves: {
+      special: { name: "Steel Guard", damage: 250, meterGain: 0, cinematic: true },
+    },
+    unlockedByDefault: false,
+  },
+  abhinav: {
+    id: "abhinav",
+    name: "Abhinav",
+    title: "The Echo",
+    element: "shift",
+    bio: "By the time you notice him, he's already somewhere else.",
+    health: 900,
+    build: "slim",
+    accessory: "hood",
+    arenaId: "mirror_hall",
+    voiceLine: "Catch the echo.",
+    introLines: ["Catch the echo.", "You're chasing a copy.", "Already gone."],
+    colors: { primary: "#1a1424", secondary: "#2e2440", emissive: "#c99bff" },
+    moves: {
+      special: { name: "Echo Step", damage: 205, meterGain: 0, cinematic: true },
     },
     unlockedByDefault: false,
   },
@@ -223,14 +320,13 @@ export const CHARACTERS: Record<string, CharacterConfig> = {
     bio: "Built the arena. Decides who leaves it.",
     health: 1300,
     build: "tank",
-    modelKey: "ely",
     accessory: "crown",
     arenaId: "void_throne",
     voiceLine: "I built this arena. I decide who leaves it.",
     introLines: ["I built this arena. I decide who leaves it.", "Everyone ends up here eventually.", "Let's see what you've learned."],
     colors: { primary: "#0a0714", secondary: "#0a0a0f", emissive: "#b98bff" },
     moves: {
-      special: { damage: 280, animation: "viraat_special_keystone", meterGain: 0, cinematic: true },
+      special: { name: "Keystone", damage: 280, meterGain: 0, cinematic: true },
     },
     unlockedByDefault: false,
     isStoryBoss: true,
@@ -253,7 +349,7 @@ export const CHARACTERS: Record<string, CharacterConfig> = {
     ],
     colors: { primary: "#0a0714", secondary: "#1a0a2e", emissive: "#ffffff" },
     moves: {
-      special: { damage: 320, animation: "overmog_special_convergence", meterGain: 0, cinematic: true },
+      special: { name: "Convergence", damage: 320, meterGain: 0, projectile: true, cinematic: true },
     },
     unlockedByDefault: false,
     isFinalBoss: true,
@@ -261,18 +357,35 @@ export const CHARACTERS: Record<string, CharacterConfig> = {
   },
 };
 
-// Scoped down to 2 fighters (one per available 3D model — Vanguard and Ely,
-// see public/models/) while control/facing/animation get nailed down for
-// real, per explicit request: get 2 fully working before duplicating back
-// up to the full twelve. The other 10 are still fully defined in CHARACTERS
-// above (all still usable in story mode) — re-adding them here is enough to
-// bring them back into normal versus-mode selection once ready; alternate
-// `modelKey` between "vanguard" and "ely" for visual variety.
+// Every CHARACTERS entry except Overmog, who isn't a friend at all (see
+// lore.ts / overmog's bio: "not a thirteenth fighter"). Viraat is both one
+// of the original twelve AND story mode's mid-ladder gatekeeper
+// (isStoryBoss) — that only affects where he shows up in the story ladder,
+// not whether he's pickable here. Mohammed through Abhinav joined the
+// roster later, sharing an element/arena with an existing friend where no
+// spare arena existed for a 19th theme.
 export const ROSTER_ORDER = [
   "gautham",
   "garv",
+  "anvith",
+  "ryan",
+  "chandan",
+  "elango",
+  "dev",
+  "aadit",
+  "rishi",
+  "ronith",
+  "tej",
+  "viraat",
+  "mohammed",
+  "dhanuh",
+  "srinath",
+  "vaishnav",
+  "ram",
+  "abhinav",
 ];
 
-// Story-mode-only entries (bosses) live outside ROSTER_ORDER so they never
-// show up in the normal versus-mode character/opponent picker.
+// Overmog lives outside ROSTER_ORDER so it never shows up in the normal
+// versus-mode character/opponent picker — final-boss-only, no humanoid
+// body to select in the first place (see Fighter2D's boss branch).
 export const ROSTER = ROSTER_ORDER.map((id) => CHARACTERS[id]);
