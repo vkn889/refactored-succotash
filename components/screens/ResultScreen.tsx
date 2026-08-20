@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { useGameStore, type FighterRuntime } from "@/lib/store";
 import { getCharacter } from "@/lib/combat";
 import { audio } from "@/lib/audio";
@@ -20,11 +21,33 @@ export default function ResultScreen() {
   const storyIndex = useGameStore((s) => s.storyIndex);
   const advanceStory = useGameStore((s) => s.advanceStory);
   const endStoryRun = useGameStore((s) => s.endStoryRun);
+  const matchOver = useGameStore((s) => s.matchOver);
+  const roundWins = useGameStore((s) => s.roundWins);
+  const roundNumber = useGameStore((s) => s.roundNumber);
+  const nextRound = useGameStore((s) => s.nextRound);
 
   const pChar = getCharacter(playerId);
   const oChar = getCharacter(opponentId);
   const playerWon = winner === "player";
   const draw = winner === "draw";
+
+  // Best of three: a round ending isn't the match ending until someone has
+  // 2 round wins — show a brief transitional screen and auto-advance
+  // instead of the full victory/story flow below, for both versus and
+  // story mode alike.
+  if (!matchOver) {
+    return (
+      <RoundTransition
+        winner={winner}
+        draw={draw}
+        roundNumber={roundNumber}
+        roundWins={roundWins}
+        pChar={pChar}
+        oChar={oChar}
+        onNext={nextRound}
+      />
+    );
+  }
 
   if (storyActive) {
     return (
@@ -62,6 +85,8 @@ export default function ResultScreen() {
         }}
       />
 
+      <KOFlash draw={draw} />
+
       <div className="relative z-10 text-center">
         <div className="text-xs uppercase tracking-[0.5em] text-white/40">
           {draw ? "Time Out" : "Victory"}
@@ -69,6 +94,9 @@ export default function ResultScreen() {
         <h1 className="font-[family-name:var(--font-display)] text-6xl sm:text-7xl tracking-wide">
           {draw ? "DRAW" : playerWon ? `${pChar.name} MOGS` : `${oChar.name} MOGS`}
         </h1>
+        <div className="mt-1 text-lg font-[family-name:var(--font-display)] tracking-widest text-white/60">
+          {roundWins.player} — {roundWins.opponent}
+        </div>
         {!draw && (
           <p className="mt-2 text-sm italic text-white/50">
             &ldquo;{playerWon ? pChar.voiceLine : oChar.voiceLine}&rdquo;
@@ -94,7 +122,7 @@ export default function ResultScreen() {
             audio.playSfx("menu_confirm");
             restartMatch();
           }}
-          className="rounded-lg bg-gradient-to-br from-orange-500 to-red-600 px-6 py-3 font-[family-name:var(--font-display)] tracking-widest shadow-[0_0_25px_rgba(255,90,30,0.35)] transition-transform hover:scale-105 active:scale-95"
+          className="arcade-panel arcade-panel-orange px-6 py-3 font-[family-name:var(--font-display)] tracking-widest shadow-[0_0_25px_rgba(255,90,30,0.35)] transition-transform hover:scale-105 active:scale-95"
         >
           REMATCH
         </button>
@@ -162,6 +190,8 @@ function StoryResultScreen({
         }}
       />
 
+      {!runComplete && <KOFlash draw={draw} />}
+
       <div className="relative z-10 text-center">
         <div className="text-xs uppercase tracking-[0.5em] text-white/40">
           Story Mode · {storyIndex + 1} / {STORY_LADDER.length}
@@ -204,7 +234,7 @@ function StoryResultScreen({
         {!won && (
           <button
             onClick={onRetry}
-            className="rounded-lg bg-gradient-to-br from-orange-500 to-red-600 px-6 py-3 font-[family-name:var(--font-display)] tracking-widest shadow-[0_0_25px_rgba(255,90,30,0.35)] transition-transform hover:scale-105 active:scale-95"
+            className="arcade-panel arcade-panel-orange px-6 py-3 font-[family-name:var(--font-display)] tracking-widest shadow-[0_0_25px_rgba(255,90,30,0.35)] transition-transform hover:scale-105 active:scale-95"
           >
             RETRY
           </button>
@@ -215,6 +245,89 @@ function StoryResultScreen({
         >
           {runComplete ? "Return Home" : "Quit Run"}
         </button>
+      </div>
+    </div>
+  );
+}
+
+/** Shown between rounds of a best-of-three match (versus or story mode
+ * alike) — a round ended, but neither side has 2 round wins yet.
+ * Auto-advances after a beat, matching the genre convention of not
+ * waiting on a button press between rounds. */
+function RoundTransition({
+  winner,
+  draw,
+  roundNumber,
+  roundWins,
+  pChar,
+  oChar,
+  onNext,
+}: {
+  winner: "player" | "opponent" | "draw" | null;
+  draw: boolean;
+  roundNumber: number;
+  roundWins: { player: number; opponent: number };
+  pChar: CharacterConfig;
+  oChar: CharacterConfig;
+  onNext: () => void;
+}) {
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      audio.playSfx("menu_select");
+      onNext();
+    }, 2400);
+    return () => window.clearTimeout(t);
+  }, [onNext]);
+
+  const roundWinner = winner === "player" ? pChar : winner === "opponent" ? oChar : null;
+
+  return (
+    <div className="relative flex h-dvh w-full flex-col items-center justify-center gap-6 overflow-hidden bg-black text-white">
+      <div
+        className="pointer-events-none absolute inset-0 opacity-30"
+        style={{ background: `radial-gradient(circle at 50% 30%, ${roundWinner?.colors.emissive ?? "#888"}33, transparent 60%)` }}
+      />
+      <KOFlash draw={draw} />
+      <div className="relative z-10 text-center">
+        <div className="text-xs uppercase tracking-[0.5em] text-white/40">Round {roundNumber}</div>
+        <h1 className="font-[family-name:var(--font-display)] text-5xl tracking-wide">
+          {draw ? "DRAW" : `${roundWinner?.name.toUpperCase()} TAKES IT`}
+        </h1>
+      </div>
+      <div className="relative z-10 flex items-center gap-6">
+        <RoundPips name={pChar.name} wins={roundWins.player} color={pChar.colors.emissive} />
+        <div className="text-white/30">—</div>
+        <RoundPips name={oChar.name} wins={roundWins.opponent} color={oChar.colors.emissive} align="right" />
+      </div>
+    </div>
+  );
+}
+
+function RoundPips({ name, wins, color, align = "left" }: { name: string; wins: number; color: string; align?: "left" | "right" }) {
+  const pips = [0, 1].map((i) => (
+    <div
+      key={i}
+      className="h-3 w-3 rounded-full border"
+      style={{ background: i < wins ? color : "transparent", borderColor: color }}
+    />
+  ));
+  return (
+    <div className={`flex flex-col items-center gap-1.5 ${align === "right" ? "items-center" : ""}`}>
+      <div className="text-sm uppercase tracking-widest text-white/70">{name}</div>
+      <div className="flex gap-1.5">{align === "right" ? pips.reverse() : pips}</div>
+    </div>
+  );
+}
+
+/** Big arcade-style stinger that slams in and fades on mount — "K.O." for
+ * a decisive finish, "TIME UP" for a clock-out draw. Every result screen
+ * variant remounts fresh (React key changes with the phase), so a plain
+ * CSS animation-on-mount is all this needs, no extra state. */
+function KOFlash({ draw }: { draw: boolean }) {
+  return (
+    <div className="pointer-events-none absolute inset-x-0 top-[18%] z-20 flex justify-center">
+      <div className="ko-flash arcade-logo font-[family-name:var(--font-display)] text-7xl tracking-wider sm:text-8xl">
+        {draw ? "TIME UP" : "K.O.!"}
       </div>
     </div>
   );

@@ -3,44 +3,43 @@
 import { create } from "zustand";
 import {
   getCharacter,
-  getPunchMove,
+  getAttackMove,
   getSpecial,
   resolveDamage,
   meterAfterHit,
-  dist,
   TIMING,
   RANGE,
-  ARENA,
+  STAGE,
   JUMP,
-  GUN,
-  AMMO,
+  PROJECTILE,
   BUILD_POWER,
-  type Vec2,
+  type AttackKind,
 } from "./combat";
 import { audio } from "./audio";
 import { ARENAS } from "./arenas";
 import { STORY_LADDER } from "./story";
-import type { LootItem } from "./types";
+import { loadStorySave, saveStoryProgress, clearStorySave } from "./storySave";
 
-export type MatchPhase = "home" | "select" | "story_select" | "fight" | "result";
+export type MatchPhase =
+  | "home"
+  | "select"
+  | "story_intro"
+  | "story_select"
+  | "multiplayer_menu"
+  | "online_lobby"
+  | "fight"
+  | "result";
 export type ActionState =
   | "idle"
-  | "attack_light"
-  | "attack_heavy"
-  | "shoot"
-  | "reload"
+  | "walk"
+  | "crouch"
+  | "punch"
+  | "kick"
   | "block"
-  | "dodge"
   | "hitstun"
-  | "charge"
   | "special"
   | "cooldown"
   | "ko";
-export type CameraState =
-  | "FIRST_PERSON"
-  | "CINEMATIC_TRANSITION"
-  | "SCRIPTED_SHOT"
-  | "RETURN_TRANSITION";
 
 export interface FighterRuntime {
   characterId: string;
@@ -51,34 +50,26 @@ export interface FighterRuntime {
   action: ActionState;
   actionTimer: number; // ms remaining in current action phase
   actionTotal: number; // ms total duration of current action (for progress bars)
-  facingLean: number; // -1..1, cosmetic strafe lean (camera roll + dodge memory)
-  chargeHeld: number; // ms held so far, while action === 'charge'
-  interruptible: boolean;
-  gunCooldown: number; // ms remaining before the next shot can fire
-  ammo: number; // rounds left in the current magazine
-  /** Increments on every landed, non-blocked hit this fighter takes — Fighter
-   * (the 3D body) watches this to trigger a knockback impulse. */
+  /** Increments on every landed, non-blocked hit this fighter takes —
+   * Fighter2D watches this to trigger a knockback/flash impulse. */
   hitToken: number;
 }
 
 export interface HitEvent {
   id: number;
-  kind: "light" | "heavy" | "shoot" | "special" | "block";
+  kind: "punch" | "kick" | "special" | "block";
   side: "player" | "opponent";
   t: number;
 }
 
-/** One resolved gunshot — pushed whether it lands or not so GunTracer can
- * draw a tracer beam either way (a miss should still visibly go somewhere). */
-export interface GunShot {
+/** A traveling elemental projectile special — see fireSpecial. */
+export interface Projectile {
   id: number;
   side: "player" | "opponent";
-  fromX: number;
-  fromZ: number;
-  toX: number;
-  toZ: number;
-  hit: boolean;
-  t: number;
+  characterId: string;
+  x: number;
+  dir: 1 | -1;
+  damage: number;
 }
 
 interface GameState {
@@ -86,44 +77,60 @@ interface GameState {
   playerId: string;
   opponentId: string;
   arenaId: string;
-  playerPos: Vec2;
-  opponentPos: Vec2;
+  playerX: number;
+  opponentX: number;
   playerY: number; // jump height above ground, 0 = grounded
   playerVelY: number;
+  opponentY: number;
+  opponentVelY: number;
   matchTime: number; // seconds remaining
-  winner: "player" | "opponent" | "draw" | null;
-  cameraState: CameraState;
-  cameraOwner: "player" | "opponent" | null;
-  hitStop: number; // ms of slo-mo/freeze remaining
+  winner: "player" | "opponent" | "draw" | null; // this ROUND's outcome
+  roundWins: { player: number; opponent: number };
+  roundNumber: number; // 1-indexed
+  matchOver: boolean; // true once either side has won ROUNDS_TO_WIN rounds
+  hitStop: number; // ms of freeze-frame remaining, classic fighting-game impact punch
   screenShake: number; // 0..1 decaying
-  stadiumFlash: number; // 0..1 decaying, arena reacts by boosting light/particles
   player: FighterRuntime;
   opponent: FighterRuntime;
   hitEvents: HitEvent[];
-  gunShots: GunShot[];
-  lootItems: LootItem[];
-  /** True the instant the player's reticle is over the opponent closely
-   * enough that firing would land (same cone GUN.aimConeRad gates the
-   * actual hit on — see AimAssist.tsx) — driven every render frame from
-   * camera-space data outside the fixed-tick loop, so it's plain state
-   * here, not something tick() computes. */
-  aimAssist: boolean;
+  projectiles: Projectile[];
   musicUnlocked: boolean;
   paused: boolean;
   tutorialSeen: boolean;
   showTutorial: boolean;
+
+  // --- online multiplayer (see lib/online.ts, components/game/OnlineBridge.tsx) ---
+  // "host" runs the real simulation (tick/AI-off, same as localMultiplayer)
+  // and broadcasts state; "joiner" runs no simulation at all and just
+  // mirrors whatever state the host broadcasts. Neither role touches the
+  // actual realtime connection object, which lives outside React state in
+  // lib/online.ts (a WebSocket channel isn't serializable store data).
+  onlineRole: "host" | "joiner" | null;
+  onlineCode: string | null;
+  setOnlineRole: (role: "host" | "joiner" | null, code?: string | null) => void;
 
   // --- story mode ---
   storyActive: boolean;
   storyIndex: number; // index into STORY_LADDER of the fight currently in progress
   storyPlayerId: string | null;
 
+  // --- local same-keyboard 2P: opponent is human-controlled (see
+  // components/game/LocalMultiplayerInput.tsx) instead of AI. Online
+  // multiplayer is a separate mode (see lib/online.ts) that doesn't touch
+  // this flag. ---
+  localMultiplayer: boolean;
+
   // --- lifecycle ---
   goHome: () => void;
-  goSelect: () => void;
+  goSelect: (localMultiplayer?: boolean) => void;
+  goStoryIntro: () => void; // "The Great Mog Off" New Game / Load Game landing screen
   goStorySelect: () => void;
+  goMultiplayerMenu: () => void; // local vs online choice
+  goOnlineLobby: () => void; // host/join-code screen
   startMatch: (playerId: string, opponentId: string, arenaId?: string) => void;
-  startStoryRun: (playerId: string) => void;
+  nextRound: () => void; // called after a non-final round ends — same match, next round
+  startStoryRun: (playerId: string) => void; // New Game — clears any existing save
+  resumeStoryRun: () => boolean; // Load Game — returns false if there's nothing to resume
   advanceStory: () => void; // called after a story-mode win — next fight, or run complete
   endStoryRun: () => void;
   restartMatch: () => void;
@@ -131,33 +138,36 @@ interface GameState {
   dismissTutorial: () => void;
   openTutorial: () => void;
 
-  // --- player input ---
-  shootGun: (yaw: number) => void; // LMB — hitscan, instant, long range + tight aim cone
-  reload: () => void; // R — refills the magazine after AMMO.reloadMs
-  lightAttack: (yaw: number) => void; // unarmed punch — instant, reach+facing checked
-  heavyAttack: (yaw: number) => void; // unarmed heavy punch, RMB — instant, reach+facing checked
+  // --- player 1 input ---
+  punch: () => void;
+  kick: () => void;
   setBlocking: (on: boolean) => void;
-  dodge: (dir: -1 | 1, yaw: number) => void;
+  setCrouching: (on: boolean) => void;
   jump: () => void;
-  chargeStart: () => void;
-  chargeRelease: () => void;
-  moveAxis: (fwd: number, strafe: number, dtSec: number, yaw: number) => void;
+  special: () => void;
+  move: (dir: -1 | 0 | 1, dtSec: number) => void;
+
+  // --- player 2 input (local multiplayer only — controls the opponent
+  // side directly instead of AI; see localMultiplayer above) ---
+  punch2: () => void;
+  kick2: () => void;
+  setBlocking2: (on: boolean) => void;
+  setCrouching2: (on: boolean) => void;
+  jump2: () => void;
+  special2: () => void;
+  move2: (dir: -1 | 0 | 1, dtSec: number) => void;
 
   // --- sim ---
   tick: (dtMs: number) => void;
 }
 
-const FIGHTER_TICK_ID = { current: 1 };
+const HIT_ID = { current: 1 };
 function nextHitId() {
-  return FIGHTER_TICK_ID.current++;
+  return HIT_ID.current++;
 }
-const GUN_SHOT_ID = { current: 1 };
-function nextGunShotId() {
-  return GUN_SHOT_ID.current++;
-}
-const LOOT_TICK_ID = { current: 1 };
-function nextLootId() {
-  return LOOT_TICK_ID.current++;
+const PROJECTILE_ID = { current: 1 };
+function nextProjectileId() {
+  return PROJECTILE_ID.current++;
 }
 
 function freshFighter(characterId: string): FighterRuntime {
@@ -171,18 +181,13 @@ function freshFighter(characterId: string): FighterRuntime {
     action: "idle",
     actionTimer: 0,
     actionTotal: 0,
-    facingLean: 0,
-    chargeHeld: 0,
-    interruptible: true,
-    gunCooldown: 0,
-    ammo: AMMO.magSize,
     hitToken: 0,
   };
 }
 
-const START_PLAYER_POS: Vec2 = { x: 0, z: 3.5 };
-const START_OPPONENT_POS: Vec2 = { x: 0, z: -3.5 };
-const LOOT_PICKUP_RADIUS = 1.1;
+const START_PLAYER_X = -2.6;
+const START_OPPONENT_X = 2.6;
+const ROUNDS_TO_WIN = 2; // best of three
 
 function readTutorialSeen(): boolean {
   if (typeof window === "undefined") return true;
@@ -194,7 +199,7 @@ function readTutorialSeen(): boolean {
 }
 
 // Shared helper signatures matching what Zustand's `create` callback hands
-// us, so the free functions below (attemptAttack/resolveSwing/fireSpecial/
+// us, so the free functions below (attemptAttack/resolveAttack/fireSpecial/
 // runAI) don't need to be inlined into the store just to get proper types.
 type SetFn = (
   partial: Partial<GameState> | ((s: GameState) => Partial<GameState> | GameState),
@@ -202,40 +207,27 @@ type SetFn = (
 ) => void;
 type GetFn = () => GameState;
 
-function attackTiming(kind: "light" | "heavy", characterId?: string) {
+function attackTiming(kind: AttackKind, characterId?: string) {
   const t = TIMING[kind];
   const speed = characterId ? BUILD_POWER[getCharacter(characterId).build].speed : 1;
   const scale = (ms: number) => Math.round(ms / speed);
-  return {
-    windup: scale(t.windup),
-    active: scale(t.active),
-    recovery: scale(t.recovery),
-    total: scale(t.windup + t.active + t.recovery),
-  };
+  return { total: scale(t.windup + t.active + t.recovery) };
 }
 
 function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
 }
 
-/** Keep a fighter inside the arena floor and never fully overlapping the
- * other fighter, without changing the direction they were trying to move in. */
-function resolveMove(next: Vec2, other: Vec2): Vec2 {
-  const bound = ARENA.radius - ARENA.moveMargin;
-  const r = Math.hypot(next.x, next.z);
-  let out = next;
-  if (r > bound) {
-    const k = bound / r;
-    out = { x: next.x * k, z: next.z * k };
+/** Keep a fighter inside the stage and never fully overlapping the other
+ * fighter, without changing the direction they were trying to move in. */
+function resolveMoveX(nextX: number, otherX: number): number {
+  const bound = STAGE.width / 2 - STAGE.margin;
+  let x = clamp(nextX, -bound, bound);
+  if (Math.abs(x - otherX) < STAGE.minSeparation) {
+    x = otherX + Math.sign(x - otherX || 1) * STAGE.minSeparation;
+    x = clamp(x, -bound, bound);
   }
-  const d = dist(out, other);
-  if (d < ARENA.minSeparation) {
-    const dx = out.x - other.x || 0.001;
-    const dz = out.z - other.z || 0;
-    const k2 = ARENA.minSeparation / (Math.hypot(dx, dz) || 1);
-    out = { x: other.x + dx * k2, z: other.z + dz * k2 };
-  }
-  return out;
+  return x;
 }
 
 export const useGameStore = create<GameState>((set, get) => ({
@@ -243,40 +235,61 @@ export const useGameStore = create<GameState>((set, get) => ({
   playerId: "gautham",
   opponentId: "garv",
   arenaId: ARENAS.fire.id,
-  playerPos: { ...START_PLAYER_POS },
-  opponentPos: { ...START_OPPONENT_POS },
+  playerX: START_PLAYER_X,
+  opponentX: START_OPPONENT_X,
   playerY: 0,
   playerVelY: 0,
-  matchTime: 150,
+  opponentY: 0,
+  opponentVelY: 0,
+  matchTime: 99,
   winner: null,
-  cameraState: "FIRST_PERSON",
-  cameraOwner: null,
+  roundWins: { player: 0, opponent: 0 },
+  roundNumber: 1,
+  matchOver: false,
   hitStop: 0,
   screenShake: 0,
-  stadiumFlash: 0,
   player: freshFighter("gautham"),
   opponent: freshFighter("garv"),
   hitEvents: [],
-  gunShots: [],
-  lootItems: [],
-  aimAssist: false,
+  projectiles: [],
   musicUnlocked: false,
   paused: false,
   tutorialSeen: readTutorialSeen(),
   showTutorial: false,
 
+  onlineRole: null,
+  onlineCode: null,
+  setOnlineRole: (role, code = null) => set({ onlineRole: role, onlineCode: code }),
+
   storyActive: false,
   storyIndex: 0,
   storyPlayerId: null,
+  localMultiplayer: false,
 
-  goHome: () => set({ phase: "home", storyActive: false, storyIndex: 0, storyPlayerId: null }),
-  goSelect: () => set({ phase: "select", storyActive: false, storyIndex: 0, storyPlayerId: null }),
+  goHome: () =>
+    set({ phase: "home", storyActive: false, storyIndex: 0, storyPlayerId: null, localMultiplayer: false, onlineRole: null, onlineCode: null }),
+  goSelect: (localMultiplayer = false) =>
+    set({ phase: "select", storyActive: false, storyIndex: 0, storyPlayerId: null, localMultiplayer }),
+  goStoryIntro: () => set({ phase: "story_intro" }),
   goStorySelect: () => set({ phase: "story_select" }),
+  goMultiplayerMenu: () => set({ phase: "multiplayer_menu" }),
+  goOnlineLobby: () => set({ phase: "online_lobby" }),
 
   startStoryRun: (playerId) => {
+    clearStorySave(); // New Game always starts a fresh save, overwriting any prior run
+    saveStoryProgress({ playerId, storyIndex: 0 });
     set({ storyActive: true, storyIndex: 0, storyPlayerId: playerId });
     const firstOpponent = STORY_LADDER[0];
     get().startMatch(playerId, firstOpponent, getCharacter(firstOpponent).arenaId);
+  },
+
+  resumeStoryRun: () => {
+    const save = loadStorySave();
+    if (!save || !STORY_LADDER[save.storyIndex]) return false;
+    set({ storyActive: true, storyIndex: save.storyIndex, storyPlayerId: save.playerId });
+    const opponent = STORY_LADDER[save.storyIndex];
+    get().startMatch(save.playerId, opponent, getCharacter(opponent).arenaId);
+    return true;
   },
 
   advanceStory: () => {
@@ -286,10 +299,12 @@ export const useGameStore = create<GameState>((set, get) => ({
     const nextOpponent = STORY_LADDER[nextIndex];
     if (!nextOpponent) {
       // Ladder complete — stay on the result screen; ResultScreen shows the
-      // ending. Nothing left to start.
+      // ending. Nothing left to start, and nothing left to resume either.
+      clearStorySave();
       set({ storyIndex: nextIndex });
       return;
     }
+    saveStoryProgress({ playerId: s.storyPlayerId, storyIndex: nextIndex });
     set({ storyIndex: nextIndex });
     get().startMatch(s.storyPlayerId, nextOpponent, getCharacter(nextOpponent).arenaId);
   },
@@ -298,35 +313,68 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   startMatch: (playerId, opponentId, arenaId) => {
     const resolvedArena = arenaId ?? getCharacter(playerId).arenaId;
-    audio.setThemeVolume(0.14);
+    audio.playMusic("fighting");
     audio.playAmbient(ARENAS[resolvedArena]?.ambientTrack ?? resolvedArena);
     const tutorialSeen = get().tutorialSeen;
-    lootNextSpawn = 8000 + Math.random() * 4000;
-    lootClock = 0;
+    aiClock = 0;
+    aiNextDecision = 0;
+    aiRangeUntil = 0;
     set({
       phase: "fight",
       playerId,
       opponentId,
       arenaId: resolvedArena,
-      playerPos: { ...START_PLAYER_POS },
-      opponentPos: { ...START_OPPONENT_POS },
+      playerX: START_PLAYER_X,
+      opponentX: START_OPPONENT_X,
       playerY: 0,
       playerVelY: 0,
-      matchTime: 150,
+      opponentY: 0,
+      opponentVelY: 0,
+      matchTime: 99,
       winner: null,
-      cameraState: "FIRST_PERSON",
-      cameraOwner: null,
+      roundWins: { player: 0, opponent: 0 },
+      roundNumber: 1,
+      matchOver: false,
       hitStop: 0,
       screenShake: 0,
-      stadiumFlash: 0,
       player: freshFighter(playerId),
       opponent: freshFighter(opponentId),
       hitEvents: [],
-      gunShots: [],
-      lootItems: [],
-      aimAssist: false,
+      projectiles: [],
       paused: !tutorialSeen,
       showTutorial: !tutorialSeen,
+    });
+  },
+
+  // Same match, next round: keeps roundWins/roundNumber (already advanced
+  // by tick()'s winner-detection block) and playerId/opponentId/arenaId,
+  // just resets health/position/timer — FightScreen skips straight back to
+  // a short "ROUND N" countdown instead of replaying the matchup intro.
+  nextRound: () => {
+    const s = get();
+    audio.playMusic("fighting");
+    audio.playAmbient(ARENAS[s.arenaId]?.ambientTrack ?? s.arenaId);
+    aiClock = 0;
+    aiNextDecision = 0;
+    aiRangeUntil = 0;
+    set({
+      phase: "fight",
+      roundNumber: s.roundNumber + 1,
+      playerX: START_PLAYER_X,
+      opponentX: START_OPPONENT_X,
+      playerY: 0,
+      playerVelY: 0,
+      opponentY: 0,
+      opponentVelY: 0,
+      matchTime: 99,
+      winner: null,
+      hitStop: 0,
+      screenShake: 0,
+      player: freshFighter(s.playerId),
+      opponent: freshFighter(s.opponentId),
+      hitEvents: [],
+      projectiles: [],
+      paused: false,
     });
   },
 
@@ -350,100 +398,100 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   openTutorial: () => set({ showTutorial: true, paused: true }),
 
-  shootGun: (yaw) => attemptShot(set, get, yaw),
-  reload: () =>
-    set((s) => {
-      if (s.phase !== "fight" || s.paused) return {};
-      if (s.player.action !== "idle") return {};
-      if (s.player.ammo >= AMMO.magSize) return {};
-      audio.playSfx("dodge"); // quick mechanical whoosh — closest existing SFX to a reload without generating a new asset
-      return {
-        player: { ...s.player, action: "reload", actionTimer: AMMO.reloadMs, actionTotal: AMMO.reloadMs },
-      };
-    }),
-  lightAttack: (yaw) => attemptAttack(set, get, "light", yaw),
-  heavyAttack: (yaw) => attemptAttack(set, get, "heavy", yaw),
+  punch: () => attemptAttack(set, get, "punch"),
+  kick: () => attemptAttack(set, get, "kick"),
 
   setBlocking: (on) =>
     set((s) => {
-      if (s.player.action !== "idle" && s.player.action !== "block") return {};
-      return { player: { ...s.player, action: on ? "block" : "idle", actionTimer: 0, actionTotal: 0 } };
+      if (on) {
+        if (s.player.action !== "idle" && s.player.action !== "walk" && s.player.action !== "crouch") return {};
+        return { player: { ...s.player, action: "block", actionTimer: 0, actionTotal: 0 } };
+      }
+      if (s.player.action !== "block") return {};
+      return { player: { ...s.player, action: "idle", actionTimer: 0, actionTotal: 0 } };
     }),
 
-  dodge: (dir, yaw) =>
+  setCrouching: (on) =>
     set((s) => {
-      if (s.player.action !== "idle" && s.player.action !== "block") return {};
-      audio.playSfx("dodge");
-      const right = { x: Math.cos(yaw), z: -Math.sin(yaw) };
-      const raw: Vec2 = {
-        x: s.playerPos.x + right.x * dir * RANGE.dodgeDistance,
-        z: s.playerPos.z + right.z * dir * RANGE.dodgeDistance,
-      };
-      const nextPos = resolveMove(raw, s.opponentPos);
-      return {
-        playerPos: nextPos,
-        player: {
-          ...s.player,
-          action: "dodge",
-          actionTimer: TIMING.dodge.duration,
-          actionTotal: TIMING.dodge.duration,
-          facingLean: dir,
-        },
-      };
+      if (on) {
+        if (s.player.action !== "idle" && s.player.action !== "walk") return {};
+        return { player: { ...s.player, action: "crouch", actionTimer: 0, actionTotal: 0 } };
+      }
+      if (s.player.action !== "crouch") return {};
+      return { player: { ...s.player, action: "idle", actionTimer: 0, actionTotal: 0 } };
     }),
 
   jump: () =>
     set((s) => {
       if (s.phase !== "fight" || s.paused) return {};
       if (s.playerY > 0.02) return {}; // already airborne
+      if (!(s.player.action === "idle" || s.player.action === "walk" || s.player.action === "crouch")) return {};
+      audio.unlock();
       return { playerVelY: JUMP.velocity };
     }),
 
-  chargeStart: () =>
+  special: () => fireSpecial(set, get, "player"),
+
+  // Single horizontal axis, camera-free: dir is -1 (toward own left) or 1
+  // (toward own right) on screen. Blocking/crouching hold you in place,
+  // same as every other side-view fighter.
+  move: (dir, dtSec) =>
     set((s) => {
-      if (s.player.meter < 100 || s.player.action !== "idle") return {};
-      audio.playSfx("charge_rumble");
-      audio.playVoiceLine(s.playerId);
-      return {
-        player: { ...s.player, action: "charge", chargeHeld: 0, interruptible: true },
-        cameraState: "CINEMATIC_TRANSITION",
-        cameraOwner: "player",
-      };
+      if (s.phase !== "fight" || s.paused || dir === 0) return {};
+      if (!(s.player.action === "idle" || s.player.action === "walk")) return {};
+      const speed = RANGE.moveSpeed * dtSec;
+      const nextX = resolveMoveX(s.playerX + dir * speed, s.opponentX);
+      return { playerX: nextX, player: { ...s.player, action: "walk" } };
     }),
 
-  chargeRelease: () => {
-    const s = get();
-    if (s.player.action !== "charge") return;
-    if (s.player.chargeHeld < TIMING.chargeMin) {
-      // released too early - cancel, keep half meter
-      set({
-        player: { ...s.player, action: "idle", meter: Math.round(s.player.meter * 0.5), chargeHeld: 0 },
-        cameraState: "FIRST_PERSON",
-        cameraOwner: null,
-      });
-      return;
-    }
-    fireSpecial(set, get, "player");
-  },
+  // --- player 2 (local multiplayer) — same rules as the P1 versions
+  // above, just targeting the opponent side's fields directly instead of
+  // going through AI. resolveAttack/fireSpecial already take a side
+  // param, so combat itself is shared; only the input-gating/movement
+  // logic (which has no shared side-agnostic form, since player/opponent
+  // live as separate named fields rather than a side-keyed map) is
+  // duplicated here.
+  punch2: () => attemptAttack2(set, get, "punch"),
+  kick2: () => attemptAttack2(set, get, "kick"),
 
-  // Free-camera FPS movement: forward/strafe are relative to where the
-  // camera (yaw) is actually looking, not the opponent. This is the
-  // player's OWN movement only — the opponent has an entirely independent
-  // position driven by AI, so the player never moves on its own.
-  moveAxis: (fwd, strafe, dtSec, yaw) =>
+  setBlocking2: (on) =>
+    set((s) => {
+      if (on) {
+        if (s.opponent.action !== "idle" && s.opponent.action !== "walk" && s.opponent.action !== "crouch") return {};
+        return { opponent: { ...s.opponent, action: "block", actionTimer: 0, actionTotal: 0 } };
+      }
+      if (s.opponent.action !== "block") return {};
+      return { opponent: { ...s.opponent, action: "idle", actionTimer: 0, actionTotal: 0 } };
+    }),
+
+  setCrouching2: (on) =>
+    set((s) => {
+      if (on) {
+        if (s.opponent.action !== "idle" && s.opponent.action !== "walk") return {};
+        return { opponent: { ...s.opponent, action: "crouch", actionTimer: 0, actionTotal: 0 } };
+      }
+      if (s.opponent.action !== "crouch") return {};
+      return { opponent: { ...s.opponent, action: "idle", actionTimer: 0, actionTotal: 0 } };
+    }),
+
+  jump2: () =>
     set((s) => {
       if (s.phase !== "fight" || s.paused) return {};
-      if (!(s.player.action === "idle" || s.player.action === "block")) return {};
-      const forward = { x: -Math.sin(yaw), z: -Math.cos(yaw) };
-      const right = { x: Math.cos(yaw), z: -Math.sin(yaw) };
-      const speed = RANGE.playerSpeed * dtSec;
-      const raw: Vec2 = {
-        x: s.playerPos.x + (forward.x * fwd + right.x * strafe) * speed,
-        z: s.playerPos.z + (forward.z * fwd + right.z * strafe) * speed,
-      };
-      const nextPos = resolveMove(raw, s.opponentPos);
-      const lean = clamp(s.player.facingLean * 0.85 + strafe * 0.4, -1, 1);
-      return { playerPos: nextPos, player: { ...s.player, facingLean: lean } };
+      if (s.opponentY > 0.02) return {};
+      if (!(s.opponent.action === "idle" || s.opponent.action === "walk" || s.opponent.action === "crouch")) return {};
+      audio.unlock();
+      return { opponentVelY: JUMP.velocity };
+    }),
+
+  special2: () => fireSpecial(set, get, "opponent"),
+
+  move2: (dir, dtSec) =>
+    set((s) => {
+      if (s.phase !== "fight" || s.paused || dir === 0) return {};
+      if (!(s.opponent.action === "idle" || s.opponent.action === "walk")) return {};
+      const speed = RANGE.moveSpeed * dtSec;
+      const nextX = resolveMoveX(s.opponentX + dir * speed, s.playerX);
+      return { opponentX: nextX, opponent: { ...s.opponent, action: "walk" } };
     }),
 
   tick: (dtMs) => {
@@ -457,19 +505,30 @@ export const useGameStore = create<GameState>((set, get) => ({
 
     const matchTime = Math.max(0, s.matchTime - dtMs / 1000);
     const screenShake = Math.max(0, s.screenShake - dtMs * 0.004);
-    const stadiumFlash = Math.max(0, s.stadiumFlash - dtMs * 0.0015);
 
+    const dt = dtMs / 1000;
     let playerY = s.playerY;
     let playerVelY = s.playerVelY;
     if (playerY > 0 || playerVelY !== 0) {
-      const dt = dtMs / 1000;
       playerVelY -= JUMP.gravity * dt;
       playerY = Math.max(0, playerY + playerVelY * dt);
       if (playerY === 0) playerVelY = 0;
     }
+    let opponentY = s.opponentY;
+    let opponentVelY = s.opponentVelY;
+    if (opponentY > 0 || opponentVelY !== 0) {
+      opponentVelY -= JUMP.gravity * dt;
+      opponentY = Math.max(0, opponentY + opponentVelY * dt);
+      if (opponentY === 0) opponentVelY = 0;
+    }
 
-    const player = stepFighter(s.player, dtMs);
-    const opponent = stepFighter(s.opponent, dtMs);
+    // A player who stops pressing a movement key just reverts to idle next
+    // tick since move() is only called while a key is actually held —
+    // nothing here needs to detect "stopped moving" itself.
+    let player = stepFighter(s.player, dtMs);
+    let opponent = stepFighter(s.opponent, dtMs);
+    if (player.action === "walk") player = { ...player, action: "idle" };
+    if (opponent.action === "walk") opponent = { ...opponent, action: "idle" };
 
     let winner = s.winner;
     let phase: MatchPhase = s.phase;
@@ -484,116 +543,121 @@ export const useGameStore = create<GameState>((set, get) => ({
     if (matchTime <= 0 && !winner) {
       winner = player.health === opponent.health ? "draw" : player.health > opponent.health ? "player" : "opponent";
     }
+    // A draw replays the same round (no round win awarded to either side)
+    // rather than advancing the match — everything else about a round
+    // ending is identical either way.
+    let roundWins = s.roundWins;
+    let matchOver = s.matchOver;
+    if (winner && winner !== "draw") {
+      roundWins = { ...s.roundWins, [winner]: s.roundWins[winner] + 1 };
+      matchOver = roundWins.player >= ROUNDS_TO_WIN || roundWins.opponent >= ROUNDS_TO_WIN;
+    }
     if (winner) {
       phase = "result";
-      audio.stopAmbient();
-      audio.setThemeVolume(0.55);
+      // Only swap back to the home theme once the whole match is decided —
+      // between rounds (matchOver still false) the battle music keeps
+      // playing straight through the round-transition screen instead of
+      // blipping back to the theme for the ~2s before nextRound() resumes it.
+      if (matchOver) {
+        audio.stopAmbient();
+        audio.playMusic("theme");
+      }
     }
 
-    set({ matchTime, screenShake, stadiumFlash, playerY, playerVelY, player, opponent, phase, winner });
+    set({ matchTime, screenShake, playerY, playerVelY, opponentY, opponentVelY, player, opponent, phase, winner, roundWins, matchOver });
 
-    runLoot(set, get, dtMs);
-    runAI(set, get, dtMs);
+    stepProjectiles(set, get, dtMs);
+    // A human at the keyboard controls the opponent side directly in local
+    // multiplayer (see punch2/kick2/move2/etc. above) — AI would otherwise
+    // fight the second player for control of the same fighter.
+    if (!s.localMultiplayer) runAI(set, get, dtMs);
   },
 }));
 
-function normalize(x: number, z: number): Vec2 {
-  const len = Math.hypot(x, z) || 1;
-  return { x: x / len, z: z / len };
-}
-
+// stepFighter only advances the CURRENT action's own timer — it doesn't
+// know about "walk", which move() sets fresh every tick it's called; tick()
+// above reverts a stale "walk" back to "idle" the moment move() stops being
+// called for a frame, matching the old 3D version's identical pattern.
 function stepFighter(f: FighterRuntime, dtMs: number): FighterRuntime {
-  const gunCooldown = Math.max(0, f.gunCooldown - dtMs);
-  const cooled = gunCooldown !== f.gunCooldown ? { gunCooldown } : null;
-
-  if (f.action === "idle" || f.action === "block" || f.action === "ko") {
-    return cooled ? { ...f, ...cooled } : f;
-  }
-  if (f.action === "charge") {
-    return { ...f, ...cooled, chargeHeld: Math.min(TIMING.chargeMax, f.chargeHeld + dtMs) };
+  if (f.action === "idle" || f.action === "walk" || f.action === "crouch" || f.action === "block" || f.action === "ko") {
+    return f;
   }
   const timer = f.actionTimer - dtMs;
-  if (timer > 0) return { ...f, ...cooled, actionTimer: timer };
-  // Reload completing refills the magazine right as the action reverts to idle.
-  const ammo = f.action === "reload" ? AMMO.magSize : f.ammo;
-  return { ...f, ...cooled, action: "idle", actionTimer: 0, actionTotal: 0, ammo };
+  if (timer > 0) return { ...f, actionTimer: timer };
+  return { ...f, action: "idle", actionTimer: 0, actionTotal: 0 };
 }
 
-function attemptAttack(set: SetFn, get: GetFn, kind: "light" | "heavy", yaw: number) {
+function attemptAttack(set: SetFn, get: GetFn, kind: AttackKind) {
   const s = get();
   if (s.phase !== "fight" || s.paused) return;
-  if (s.player.action !== "idle") return;
+  if (s.player.action !== "idle" && s.player.action !== "walk" && s.player.action !== "crouch") return;
   const timing = attackTiming(kind, s.playerId);
   audio.unlock();
 
   // Resolve the hit THIS SAME TICK, using positions as they are right now —
-  // no delayed re-check. The old system set a timeout at windup-start and
-  // only tested range when it fired, so any movement in that gap (yours or
-  // the AI's) could turn an on-target click into a silent whiff. The windup/
-  // recovery timing still runs for the swing animation, but it's now purely
-  // cosmetic and never gates whether the hit landed.
+  // no delayed re-check. The windup/recovery timing still runs for the
+  // swing animation, but it's purely cosmetic and never gates whether the
+  // hit landed (see the note at the top of lib/combat.ts).
   set({
-    player: { ...s.player, action: kind === "light" ? "attack_light" : "attack_heavy", actionTimer: timing.total, actionTotal: timing.total },
+    player: { ...s.player, action: kind, actionTimer: timing.total, actionTotal: timing.total },
   });
-  resolveSwing(set, get, "player", kind, yaw);
+  resolveAttack(set, get, "player", kind);
 }
 
-function resolveSwing(set: SetFn, get: GetFn, side: "player" | "opponent", kind: "light" | "heavy", attackerYaw?: number) {
+/** Local-multiplayer P2's punch/kick — same instant-resolve rule as P1's
+ * attemptAttack, just targeting the opponent side (a real second player,
+ * not AI, when this is ever called — see localMultiplayer). */
+function attemptAttack2(set: SetFn, get: GetFn, kind: AttackKind) {
+  const s = get();
+  if (s.phase !== "fight" || s.paused) return;
+  if (s.opponent.action !== "idle" && s.opponent.action !== "walk" && s.opponent.action !== "crouch") return;
+  const timing = attackTiming(kind, s.opponentId);
+  audio.unlock();
+  set({
+    opponent: { ...s.opponent, action: kind, actionTimer: timing.total, actionTotal: timing.total },
+  });
+  resolveAttack(set, get, "opponent", kind);
+}
+
+function resolveAttack(set: SetFn, get: GetFn, side: "player" | "opponent", kind: AttackKind) {
   const s = get();
   const attacker = side === "player" ? s.player : s.opponent;
   const defender = side === "player" ? s.opponent : s.player;
   const attackerId = side === "player" ? s.playerId : s.opponentId;
   const defenderMove = defender.action;
 
-  const attackerPos = side === "player" ? s.playerPos : s.opponentPos;
-  const defenderPos = side === "player" ? s.opponentPos : s.playerPos;
-  const dx = defenderPos.x - attackerPos.x;
-  const dz = defenderPos.z - attackerPos.z;
-  const distance = Math.hypot(dx, dz);
-  if (distance > RANGE.reach) return;
+  const attackerX = side === "player" ? s.playerX : s.opponentX;
+  const defenderX = side === "player" ? s.opponentX : s.playerX;
+  if (Math.abs(defenderX - attackerX) > RANGE.reach) return;
 
-  if (attackerYaw !== undefined) {
-    // Player attack: must be roughly looking at the target (crosshair-ish,
-    // not pixel-precise) — forward-from-yaw is (-sin(yaw),-cos(yaw)) (see
-    // moveAxis), so the yaw that points AT (dx,dz) is atan2(-dx,-dz).
-    const toTargetYaw = Math.atan2(-dx, -dz);
-    let diff = toTargetYaw - attackerYaw;
-    diff = Math.atan2(Math.sin(diff), Math.cos(diff));
-    if (Math.abs(diff) > RANGE.facingConeRad) return;
-  }
-
-  const move = getPunchMove(attackerId, kind);
+  const move = getAttackMove(attackerId, kind);
   const blocking = defenderMove === "block";
   const dmg = resolveDamage(move.damage, blocking, side === "opponent");
 
-  const newHealth = clamp((defender.health - dmg) as number, 0, defender.maxHealth);
+  const newHealth = clamp(defender.health - dmg, 0, defender.maxHealth);
   const newAttackerMeter = meterAfterHit(attacker.meter, move.meterGain);
-  const hitstun = kind === "light" ? TIMING.hitstun_light : TIMING.hitstun_heavy;
+  const hitstun = kind === "punch" ? TIMING.hitstun_punch : TIMING.hitstun_kick;
 
-  audio.playSfx(blocking ? "block" : kind === "heavy" ? "hit_heavy" : "hit_light");
+  audio.playSfx(blocking ? "block" : kind === "kick" ? "hit_heavy" : "hit_light");
   if (attacker.meter < 100 && newAttackerMeter >= 100) audio.playSfx("meter_full");
 
   const defenderPatch: Partial<FighterRuntime> = blocking
     ? { health: newHealth }
-    : { health: newHealth, action: "hitstun", actionTimer: hitstun, actionTotal: hitstun, chargeHeld: 0, hitToken: defender.hitToken + 1, combo: 0 };
-
-  const defenderSide = side === "player" ? "opponent" : "player";
-  const interruptedCharge = !blocking && defenderMove === "charge" && s.cameraOwner === defenderSide;
-  if (interruptedCharge) {
-    set({ cameraState: "FIRST_PERSON", cameraOwner: null });
-  }
+    : { health: newHealth, action: "hitstun", actionTimer: hitstun, actionTotal: hitstun, hitToken: defender.hitToken + 1, combo: 0 };
 
   if (side === "player") {
     set({
       opponent: { ...defender, ...defenderPatch },
       player: { ...attacker, meter: newAttackerMeter, combo: attacker.combo + 1 },
-      screenShake: kind === "heavy" ? 0.4 : 0.2,
+      screenShake: kind === "kick" ? 0.4 : 0.2,
+      hitStop: blocking ? 0 : kind === "kick" ? 90 : 45,
     });
   } else {
     set({
       player: { ...defender, ...defenderPatch },
       opponent: { ...attacker, meter: newAttackerMeter, combo: attacker.combo + 1 },
-      screenShake: kind === "heavy" ? 0.4 : 0.2,
+      screenShake: kind === "kick" ? 0.4 : 0.2,
+      hitStop: blocking ? 0 : kind === "kick" ? 90 : 45,
     });
   }
   pushHitEvent(set, get, blocking ? "block" : kind, side);
@@ -605,215 +669,104 @@ function pushHitEvent(set: SetFn, get: GetFn, kind: HitEvent["kind"], side: HitE
   set({ hitEvents: events });
 }
 
-function attemptShot(set: SetFn, get: GetFn, yaw: number) {
-  const s = get();
-  if (s.phase !== "fight" || s.paused) return;
-  if (s.player.action !== "idle") return;
-  if (s.player.gunCooldown > 0) return;
-  if (s.player.ammo <= 0) {
-    audio.playSfx("menu_select"); // dry-fire click — same "nothing happened" cue as a disabled menu action
-    return;
-  }
-  audio.unlock();
-
-  set({
-    player: { ...s.player, action: "shoot", actionTimer: GUN.recoveryMs, actionTotal: GUN.recoveryMs, gunCooldown: GUN.cooldownMs, ammo: s.player.ammo - 1 },
-  });
-  resolveShot(set, get, "player", yaw);
-}
-
-/** Hitscan resolve — same instant-resolve rule as punches (see the note at
- * the top of lib/combat.ts): checked and applied the instant the trigger is
- * pulled, never re-tested after a delay. Always pushes a GunShot (hit or
- * miss) so GunTracer.tsx has something to draw either way — a shot that
- * goes nowhere should still visibly go somewhere. */
-function resolveShot(set: SetFn, get: GetFn, side: "player" | "opponent", attackerYaw?: number) {
-  const s = get();
-  const attacker = side === "player" ? s.player : s.opponent;
-  const defender = side === "player" ? s.opponent : s.player;
-  const defenderMove = defender.action;
-
-  const attackerPos = side === "player" ? s.playerPos : s.opponentPos;
-  const defenderPos = side === "player" ? s.opponentPos : s.playerPos;
-  const dx = defenderPos.x - attackerPos.x;
-  const dz = defenderPos.z - attackerPos.z;
-  const distance = Math.hypot(dx, dz);
-
-  // Aim direction: the player's own camera yaw, or (for the AI, which has
-  // no yaw of its own) straight at whoever it's shooting at — same
-  // atan2(-dx,-dz) convention as the facing-cone check in resolveSwing.
-  const toTargetYaw = Math.atan2(-dx, -dz);
-  const aimYaw = attackerYaw ?? toTargetYaw;
-
-  let hit = false;
-  if (distance <= GUN.range) {
-    if (attackerYaw !== undefined) {
-      let diff = toTargetYaw - attackerYaw;
-      diff = Math.atan2(Math.sin(diff), Math.cos(diff));
-      hit = Math.abs(diff) <= GUN.aimConeRad;
-    } else {
-      hit = true;
-    }
-  }
-
-  const dirX = -Math.sin(aimYaw);
-  const dirZ = -Math.cos(aimYaw);
-  const travel = hit ? distance : GUN.range;
-  const shot: GunShot = {
-    id: nextGunShotId(),
-    side,
-    fromX: attackerPos.x,
-    fromZ: attackerPos.z,
-    toX: attackerPos.x + dirX * travel,
-    toZ: attackerPos.z + dirZ * travel,
-    hit,
-    t: performance.now(),
-  };
-  set({ gunShots: [...get().gunShots, shot].slice(-16) });
-  audio.playSfx("gunshot");
-
-  if (!hit) return;
-
-  const blocking = defenderMove === "block";
-  const dmg = resolveDamage(GUN.damage, blocking, side === "opponent");
-  const newHealth = clamp((defender.health - dmg) as number, 0, defender.maxHealth);
-  const newAttackerMeter = meterAfterHit(attacker.meter, GUN.meterGain);
-
-  audio.playSfx(blocking ? "block" : "hit_light");
-  if (attacker.meter < 100 && newAttackerMeter >= 100) audio.playSfx("meter_full");
-
-  const defenderPatch: Partial<FighterRuntime> = blocking
-    ? { health: newHealth }
-    : { health: newHealth, action: "hitstun", actionTimer: TIMING.hitstun_light, actionTotal: TIMING.hitstun_light, chargeHeld: 0, hitToken: defender.hitToken + 1, combo: 0 };
-
-  const defenderSide = side === "player" ? "opponent" : "player";
-  const interruptedCharge = !blocking && defenderMove === "charge" && s.cameraOwner === defenderSide;
-  if (interruptedCharge) set({ cameraState: "FIRST_PERSON", cameraOwner: null });
-
-  if (side === "player") {
-    set({
-      opponent: { ...defender, ...defenderPatch },
-      player: { ...attacker, meter: newAttackerMeter, combo: attacker.combo + 1 },
-      screenShake: 0.15,
-    });
-  } else {
-    set({
-      player: { ...defender, ...defenderPatch },
-      opponent: { ...attacker, meter: newAttackerMeter, combo: attacker.combo + 1 },
-      screenShake: 0.15,
-    });
-  }
-  pushHitEvent(set, get, blocking ? "block" : "shoot", side);
-}
-
+/** Meter-gated finisher: an instant close-range burst, or a traveling
+ * projectile — see MoveConfig.projectile in lib/types.ts. Same
+ * instant-resolve-on-windup-end discipline as a normal punch/kick, just on
+ * a longer, more dramatic timer (TIMING.specialWindup) with a hit-stop +
+ * screen-shake flourish since this is meant to read as the "finisher." */
 function fireSpecial(set: SetFn, get: GetFn, side: "player" | "opponent") {
   const s = get();
   const fighter = side === "player" ? s.player : s.opponent;
   const characterId = side === "player" ? s.playerId : s.opponentId;
+  if (fighter.meter < 100) return;
+  if (fighter.action !== "idle" && fighter.action !== "walk" && fighter.action !== "crouch") return;
   const move = getSpecial(characterId);
 
   set({
-    [side]: { ...fighter, action: "special", actionTimer: TIMING.specialRelease, actionTotal: TIMING.specialRelease, interruptible: false },
-    cameraState: "SCRIPTED_SHOT",
-    cameraOwner: side,
+    [side]: { ...fighter, action: "special", actionTimer: TIMING.specialWindup, actionTotal: TIMING.specialWindup },
   });
-  audio.playSfx("special_release");
-  pushHitEvent(set, get, "special", side);
+  audio.playSfx("charge_rumble");
+  audio.playVoiceLine(characterId);
 
   window.setTimeout(() => {
     const cur = get();
     if (cur.phase !== "fight") return;
-    const defender = side === "player" ? cur.opponent : cur.player;
-    const dmg = resolveDamage(move.damage, defender.action === "block", side === "opponent");
-    const newHealth = clamp(defender.health - dmg, 0, defender.maxHealth);
-    const patch: Partial<FighterRuntime> =
-      defender.action === "block"
-        ? { health: newHealth }
-        : { health: newHealth, action: "hitstun", actionTimer: TIMING.hitstun_heavy, actionTotal: TIMING.hitstun_heavy, hitToken: defender.hitToken + 1, combo: 0 };
-    const attackerAfter = { ...(side === "player" ? cur.player : cur.opponent), action: "cooldown" as ActionState, actionTimer: TIMING.cooldown, actionTotal: TIMING.cooldown, meter: 0, chargeHeld: 0 };
-    set({
-      [side === "player" ? "opponent" : "player"]: { ...defender, ...patch },
-      [side]: attackerAfter,
-      cameraState: "RETURN_TRANSITION",
-      screenShake: 1,
-    });
-    window.setTimeout(() => {
-      if (get().phase !== "fight") return;
-      set({ cameraState: "FIRST_PERSON", cameraOwner: null });
-    }, 350);
-  }, TIMING.specialRelease);
-}
+    audio.playSfx("special_release");
+    pushHitEvent(set, get, "special", side);
 
-// --- Ground loot: periodic heal/stadium pickups ---
-let lootClock = 0;
-let lootNextSpawn = 8000;
-
-function runLoot(set: SetFn, get: GetFn, dtMs: number) {
-  lootClock += dtMs;
-  const s = get();
-
-  if (lootClock > lootNextSpawn && s.lootItems.length < 2) {
-    lootNextSpawn = lootClock + 12000 + Math.random() * 8000;
-    const bound = ARENA.radius - ARENA.moveMargin - 3;
-    let x = 0;
-    let z = 0;
-    for (let tries = 0; tries < 8; tries++) {
-      const a = Math.random() * Math.PI * 2;
-      const r = Math.random() * bound;
-      x = Math.cos(a) * r;
-      z = Math.sin(a) * r;
-      if (dist({ x, z }, s.playerPos) > 2.5 && dist({ x, z }, s.opponentPos) > 2.5) break;
-    }
-    const kind: LootItem["kind"] = Math.random() < 0.6 ? "heal" : "stadium";
-    set({ lootItems: [...s.lootItems, { id: nextLootId(), kind, x, z, bornAt: lootClock }] });
-  }
-
-  if (s.lootItems.length === 0) return;
-  let remaining = s.lootItems;
-  let playerPatch: Partial<FighterRuntime> | null = null;
-  let opponentPatch: Partial<FighterRuntime> | null = null;
-  let stadiumFlash = s.stadiumFlash;
-
-  for (const item of s.lootItems) {
-    const pickedByPlayer = dist(s.playerPos, item) < LOOT_PICKUP_RADIUS;
-    const pickedByOpponent = !pickedByPlayer && dist(s.opponentPos, item) < LOOT_PICKUP_RADIUS;
-    if (!pickedByPlayer && !pickedByOpponent) continue;
-
-    remaining = remaining.filter((l) => l.id !== item.id);
-    audio.playSfx("meter_full");
-
-    if (item.kind === "heal") {
-      if (pickedByPlayer) {
-        const healed = Math.min(s.player.maxHealth, s.player.health + Math.round(s.player.maxHealth * 0.18));
-        playerPatch = { ...(playerPatch ?? {}), health: healed };
-      } else {
-        const healed = Math.min(s.opponent.maxHealth, s.opponent.health + Math.round(s.opponent.maxHealth * 0.18));
-        opponentPatch = { ...(opponentPatch ?? {}), health: healed };
-      }
+    if (move.projectile) {
+      const attackerX = side === "player" ? cur.playerX : cur.opponentX;
+      const dir: 1 | -1 = side === "player" ? (cur.opponentX >= attackerX ? 1 : -1) : cur.playerX >= attackerX ? 1 : -1;
+      set({
+        projectiles: [
+          ...cur.projectiles,
+          { id: nextProjectileId(), side, characterId, x: attackerX, dir, damage: move.damage },
+        ],
+      });
     } else {
-      stadiumFlash = 1;
+      const attackerX = side === "player" ? cur.playerX : cur.opponentX;
+      const defenderX = side === "player" ? cur.opponentX : cur.playerX;
+      if (Math.abs(defenderX - attackerX) <= RANGE.specialReach) {
+        applySpecialHit(set, get, side, move.damage);
+      }
     }
-  }
 
-  if (remaining !== s.lootItems || playerPatch || opponentPatch || stadiumFlash !== s.stadiumFlash) {
+    const after = get();
+    const attackerNow = side === "player" ? after.player : after.opponent;
     set({
-      lootItems: remaining,
-      stadiumFlash,
-      ...(playerPatch ? { player: { ...get().player, ...playerPatch } } : {}),
-      ...(opponentPatch ? { opponent: { ...get().opponent, ...opponentPatch } } : {}),
+      [side]: { ...attackerNow, action: "cooldown", actionTimer: TIMING.cooldown, actionTotal: TIMING.cooldown, meter: 0 },
     });
-  }
+  }, TIMING.specialWindup);
 }
 
-// --- Opponent AI: independent movement + shoot/punch/block decisions ---
+function applySpecialHit(set: SetFn, get: GetFn, side: "player" | "opponent", damage: number) {
+  const s = get();
+  const defender = side === "player" ? s.opponent : s.player;
+  const blocking = defender.action === "block";
+  const dmg = resolveDamage(damage, blocking, side === "opponent");
+  const newHealth = clamp(defender.health - dmg, 0, defender.maxHealth);
+  const patch: Partial<FighterRuntime> = blocking
+    ? { health: newHealth }
+    : { health: newHealth, action: "hitstun", actionTimer: TIMING.hitstun_kick, actionTotal: TIMING.hitstun_kick, hitToken: defender.hitToken + 1, combo: 0 };
+  set({
+    [side === "player" ? "opponent" : "player"]: { ...defender, ...patch },
+    screenShake: 1,
+    hitStop: blocking ? 60 : 160,
+  });
+}
+
+function stepProjectiles(set: SetFn, get: GetFn, dtMs: number) {
+  const s = get();
+  if (s.projectiles.length === 0) return;
+  const dt = dtMs / 1000;
+  const bound = STAGE.width / 2;
+  const remaining: Projectile[] = [];
+  let hitSide: "player" | "opponent" | null = null;
+  let hitDamage = 0;
+
+  for (const p of s.projectiles) {
+    const x = p.x + p.dir * PROJECTILE.speed * dt;
+    const targetX = p.side === "player" ? get().opponentX : get().playerX;
+    if (Math.abs(x - targetX) <= PROJECTILE.hitRadius) {
+      hitSide = p.side;
+      hitDamage = p.damage;
+      continue; // consumed on hit
+    }
+    if (x < -bound - 1 || x > bound + 1) continue; // flew off stage — miss
+    remaining.push({ ...p, x });
+  }
+
+  if (hitSide) applySpecialHit(set, get, hitSide, hitDamage);
+  set({ projectiles: remaining });
+}
+
+// --- Opponent AI: independent movement + punch/kick/block/jump/special
+// decisions along the single stage axis. ---
 let aiNextDecision = 0;
 let aiClock = 0;
-let aiStrafeDir = 1;
-let aiStrafeUntil = 0;
-// The AI alternates between brawling in close and kiting at range, rather
-// than always beelining to melee distance — makes the gun actually matter
-// for the opponent too, not just the player.
-let aiPreferredRange = 1.5;
+// Alternates between brawling in close and hanging back, rather than
+// always beelining to melee distance.
+let aiPreferredRange = 1.2;
 let aiRangeUntil = 0;
 
 function runAI(set: SetFn, get: GetFn, dtMs: number) {
@@ -822,91 +775,61 @@ function runAI(set: SetFn, get: GetFn, dtMs: number) {
   if (s.opponent.action === "ko" || s.player.action === "ko") return;
 
   if (aiClock > aiRangeUntil) {
-    aiRangeUntil = aiClock + 3000 + Math.random() * 4000;
-    aiPreferredRange = Math.random() < 0.45 ? 1.5 : 6 + Math.random() * 5;
+    aiRangeUntil = aiClock + 2500 + Math.random() * 3500;
+    aiPreferredRange = Math.random() < 0.55 ? 1.1 : 3 + Math.random() * 4;
   }
 
-  // Independent steering: approach/retreat to a preferred range, with
-  // occasional lateral circling so it doesn't just walk straight in.
-  if (s.opponent.action === "idle" || s.opponent.action === "block") {
-    const toPlayer = normalize(s.playerPos.x - s.opponentPos.x, s.playerPos.z - s.opponentPos.z);
-    const tangent = { x: -toPlayer.z, z: toPlayer.x };
-    const d = dist(s.opponentPos, s.playerPos);
-
-    if (aiClock > aiStrafeUntil) {
-      aiStrafeUntil = aiClock + 1200 + Math.random() * 1800;
-      aiStrafeDir = Math.random() < 0.5 ? -1 : 1;
+  // Independent steering: approach/retreat toward a preferred spacing.
+  if (s.opponent.action === "idle" || s.opponent.action === "walk") {
+    const d = s.playerX - s.opponentX;
+    const dist = Math.abs(d);
+    const toward = Math.sign(d) || 1;
+    const radial = dist > aiPreferredRange + 0.4 ? toward : dist < aiPreferredRange - 0.4 ? -toward : 0;
+    if (radial !== 0) {
+      const speed = RANGE.aiSpeed * (dtMs / 1000);
+      const nextX = resolveMoveX(s.opponentX + radial * speed, s.playerX);
+      set({ opponentX: nextX, opponent: { ...get().opponent, action: "walk" } });
     }
-
-    const radial = d > aiPreferredRange + 0.5 ? 1 : d < aiPreferredRange - 0.5 ? -1 : 0;
-    const speed = RANGE.aiSpeed * (dtMs / 1000);
-    const raw: Vec2 = {
-      x: s.opponentPos.x + (toPlayer.x * radial + tangent.x * aiStrafeDir * 0.55) * speed,
-      z: s.opponentPos.z + (toPlayer.z * radial + tangent.z * aiStrafeDir * 0.55) * speed,
-    };
-    set({ opponentPos: resolveMove(raw, s.playerPos) });
   }
 
   if (aiClock < aiNextDecision) return;
-  aiNextDecision = aiClock + 280 + Math.random() * 380;
+  aiNextDecision = aiClock + 300 + Math.random() * 400;
 
   const cur = get();
   if (cur.opponent.action !== "idle") return;
 
-  // charge special when meter full and healthy
-  if (cur.opponent.meter >= 100 && Math.random() < 0.6) {
-    audio.playSfx("charge_rumble");
-    audio.playVoiceLine(cur.opponentId);
-    set({ opponent: { ...cur.opponent, action: "charge", chargeHeld: 0 } });
-    window.setTimeout(() => {
-      const c2 = get();
-      if (c2.phase !== "fight" || c2.opponent.action !== "charge") return;
-      fireSpecial(set, get, "opponent");
-    }, 900);
-    return;
-  }
-
-  const d = dist(cur.opponentPos, cur.playerPos);
+  const d = Math.abs(cur.opponentX - cur.playerX);
   const inMelee = d <= RANGE.reach;
-  const inGunRange = d <= GUN.range;
-  const gunReady = cur.opponent.gunCooldown <= 0 && cur.opponent.ammo > 0;
   const roll = Math.random();
 
-  if (cur.player.action.startsWith("attack_") && inMelee && roll < 0.4) {
-    set({ opponent: { ...cur.opponent, action: "block" } });
-    window.setTimeout(() => {
-      const c3 = get();
-      if (c3.phase === "fight" && c3.opponent.action === "block") set({ opponent: { ...c3.opponent, action: "idle" } });
-    }, 400 + Math.random() * 250);
+  // charge special when meter full
+  if (cur.opponent.meter >= 100 && roll < 0.6) {
+    fireSpecial(set, get, "opponent");
     return;
   }
 
-  // Out of ammo and not already reloading — top up rather than standing
-  // there uselessly holding an empty gun.
-  if (cur.opponent.ammo <= 0) {
-    set({ opponent: { ...cur.opponent, action: "reload", actionTimer: AMMO.reloadMs, actionTotal: AMMO.reloadMs } });
-    return;
+  if (cur.player.action === "punch" || cur.player.action === "kick") {
+    if (inMelee && roll < 0.4) {
+      set({ opponent: { ...cur.opponent, action: "block" } });
+      window.setTimeout(() => {
+        const c3 = get();
+        if (c3.phase === "fight" && c3.opponent.action === "block") set({ opponent: { ...c3.opponent, action: "idle" } });
+      }, 400 + Math.random() * 250);
+      return;
+    }
   }
 
-  // Prefer the gun outside melee range; still take the occasional pot-shot
-  // even up close so it doesn't feel like the gun only exists offscreen.
-  if (gunReady && inGunRange && (!inMelee || roll < 0.3) && roll < 0.8) {
-    set({
-      opponent: { ...cur.opponent, action: "shoot", actionTimer: GUN.recoveryMs, actionTotal: GUN.recoveryMs, gunCooldown: GUN.cooldownMs, ammo: cur.opponent.ammo - 1 },
-    });
-    resolveShot(set, get, "opponent");
+  if (!inMelee && roll < 0.12 && cur.opponentY <= 0.02) {
+    set({ opponentVelY: JUMP.velocity });
     return;
   }
 
   if (inMelee && roll < 0.85) {
-    const kind: "light" | "heavy" = roll < 0.55 ? "light" : "heavy";
+    const kind: AttackKind = roll < 0.55 ? "punch" : "kick";
     const timing = attackTiming(kind, cur.opponentId);
     set({
-      opponent: { ...cur.opponent, action: kind === "light" ? "attack_light" : "attack_heavy", actionTimer: timing.total, actionTotal: timing.total },
+      opponent: { ...cur.opponent, action: kind, actionTimer: timing.total, actionTotal: timing.total },
     });
-    // Same instant-resolve rule as the player — the AI is always facing the
-    // player (MixamoFighter's facing logic), so it never needs a facing-
-    // cone check of its own, just the reach check inside resolveSwing.
-    resolveSwing(set, get, "opponent", kind);
+    resolveAttack(set, get, "opponent", kind);
   }
 }

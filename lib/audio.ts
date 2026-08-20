@@ -11,8 +11,29 @@ type Bank = Record<string, Howl>;
 const sfxBank: Bank = {};
 const voiceBank: Bank = {};
 const ambientBank: Bank = {};
-let themeHowl: Howl | null = null;
 let currentAmbient: Howl | null = null;
+
+// Named full-length music cues — only one plays at a time, crossfaded via
+// playMusic(). "theme" is the original home-screen loop; the other three
+// were supplied later (see AGENTS notes / user-provided assets) for
+// stage-select, in-battle, and the story-mode prelude respectively.
+const MUSIC_TRACKS = {
+  theme: { src: "/audio/theme.mp3", volume: 0.55 },
+  fighting: { src: "/audio/fighting.mp3", volume: 0.5 },
+  stageSelect: { src: "/audio/stage-select.mp3", volume: 0.5 },
+  prelude: { src: "/audio/prelude.mp3", volume: 0.45 },
+} as const;
+export type MusicTrack = keyof typeof MUSIC_TRACKS;
+
+const musicBank: Partial<Record<MusicTrack, Howl>> = {};
+let currentMusicKey: MusicTrack | null = null;
+
+function getMusic(key: MusicTrack): Howl {
+  if (!musicBank[key]) {
+    musicBank[key] = new Howl({ src: [MUSIC_TRACKS[key].src], loop: true, volume: 0 });
+  }
+  return musicBank[key]!;
+}
 
 const SFX_IDS = [
   "hit_light",
@@ -88,26 +109,45 @@ export const audio = {
     getVoice(characterId).play();
   },
 
-  playTheme() {
+  /** Crossfades to a named music cue (see MUSIC_TRACKS) — no-op if it's
+   * already the one playing. Only one plays at a time; the previous one
+   * fades out while the new one fades in. */
+  playMusic(key: MusicTrack, fadeMs = 700) {
     if (typeof window === "undefined") return;
-    if (!themeHowl) {
-      themeHowl = new Howl({
-        src: ["/audio/theme.mp3"],
-        loop: true,
-        volume: 0.55,
-      });
+    if (currentMusicKey === key) return;
+    const prevKey = currentMusicKey;
+    if (prevKey) {
+      const prev = musicBank[prevKey]!;
+      prev.fade(prev.volume(), 0, fadeMs);
+      window.setTimeout(() => prev.stop(), fadeMs + 50);
     }
-    if (!themeHowl.playing()) themeHowl.play();
+    const next = getMusic(key);
+    next.play();
+    next.fade(next.volume(), MUSIC_TRACKS[key].volume, fadeMs);
+    currentMusicKey = key;
   },
 
+  stopMusic(fadeMs = 600) {
+    if (!currentMusicKey) return;
+    const prev = musicBank[currentMusicKey]!;
+    prev.fade(prev.volume(), 0, fadeMs);
+    window.setTimeout(() => prev.stop(), fadeMs + 50);
+    currentMusicKey = null;
+  },
+
+  setMusicVolume(v: number) {
+    if (currentMusicKey) musicBank[currentMusicKey]!.volume(v);
+  },
+
+  // --- back-compat aliases for the original theme-only API ---
+  playTheme() {
+    this.playMusic("theme");
+  },
   stopTheme(fadeMs = 600) {
-    if (!themeHowl) return;
-    themeHowl.fade(themeHowl.volume(), 0, fadeMs);
-    window.setTimeout(() => themeHowl?.stop(), fadeMs);
+    this.stopMusic(fadeMs);
   },
-
   setThemeVolume(v: number) {
-    themeHowl?.volume(v);
+    this.setMusicVolume(v);
   },
 
   playAmbient(trackId: string) {

@@ -33,3 +33,18 @@ chance a night to prove, on the record, who mogs.`;
 
 export const CLOSING_LINE =
   "Viraat built the arena. Everyone else just has to survive it.";
+
+// The story-mode framing myth — surfaced on the story landing screen
+// (New Game / Load Game) before the ladder starts.
+export const STORY_TITLE = "The Great Mog Off";
+
+export const STORY_INTRO = `Before there was a ladder, there was one fight
+nobody could agree on. Gautham and Garv went eleven rounds the first night
+the Mogsphere opened — fire against stillwater, a furnace against a glacier
+that refused to melt — and by the time the ring finally closed neither side
+would admit the other had won. Gautham says he took it in the ninth. Garv
+says there was no ninth round worth counting. The other ten have picked
+sides, switched sides, and picked them again, and the argument is older
+than most of their other friendships. Nobody's settled it. That's the whole
+reason the ladder exists: walk it, beat what's waiting at the end of it,
+and maybe you get to be the one who finally gets to say who mogs.`;

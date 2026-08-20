@@ -27,3 +27,101 @@ canvas {
   outline: none;
   touch-action: none;
 }
+
+/* --- Retro 90's arcade treatment (SF2/MK-style chrome, bevels, CRT) --- */
+
+/* SF2-marquee-style logo lettering: gold-to-red chrome gradient fill, a
+ * dark stroke outline, italic slant, and a hard drop shadow instead of a
+ * soft one — used for the home screen title and the story-mode title. */
+.arcade-logo {
+  font-style: italic;
+  letter-spacing: 0.01em;
+  display: inline-block;
+  transform: skewX(-8deg);
+  background: linear-gradient(180deg, #fff7c2 0%, #ffce4d 28%, #ff8a1f 55%, #e8433a 80%, #7a1408 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-stroke: 2px #1a0500;
+  text-shadow: 0 3px 0 #4a0e05, 0 6px 0 #2a0602, 0 14px 24px rgba(0, 0, 0, 0.65);
+}
+
+/* Beveled arcade-cabinet panel border — chrome-ish gradient edge with an
+ * inset highlight/shadow, used for buttons and cards throughout instead of
+ * a flat 1px border. */
+.arcade-panel {
+  border: 3px solid transparent;
+  border-radius: 0.5rem;
+  background-image: linear-gradient(#0a0a0a, #0a0a0a), linear-gradient(180deg, #ffd76a, #8a4a10);
+}
+.arcade-panel-orange {
+  background-image: linear-gradient(#c23a1e, #7a1e0c), linear-gradient(180deg, #ffd76a, #8a4a10);
+}
+.arcade-panel-purple {
+  background-image: linear-gradient(#3a1450, #1a0828), linear-gradient(180deg, #e6a6ff, #7a2ab0);
+}
+.arcade-panel,
+.arcade-panel-orange,
+.arcade-panel-purple {
+  background-origin: border-box;
+  background-clip: padding-box, border-box;
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.2),
+    inset 0 -3px 0 rgba(0, 0, 0, 0.5),
+    0 4px 14px rgba(0, 0, 0, 0.5);
+}
+
+/* Fixed CRT scanline + vignette overlay — subtle enough not to hurt
+ * readability, present on every screen for that "arcade cabinet monitor"
+ * texture. Rendered once, globally (see app/page.tsx). */
+.crt-overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+}
+.crt-overlay::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(to bottom, rgba(0, 0, 0, 0.16) 0px, rgba(0, 0, 0, 0.16) 1px, transparent 1px, transparent 3px);
+  mix-blend-mode: multiply;
+  opacity: 0.5;
+}
+.crt-overlay::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse 80% 75% at 50% 50%, transparent 55%, rgba(0, 0, 0, 0.55) 100%);
+}
+
+/* "FIGHT!" / "K.O." style arcade text stingers — slam in oversized, settle,
+ * hold, then fade. Used at round start and on the result screen. */
+@keyframes stinger-slam {
+  0% {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+  12% {
+    transform: scale(0.92);
+    opacity: 1;
+  }
+  20% {
+    transform: scale(1.04);
+  }
+  28%,
+  78% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 0;
+  }
+}
+.fight-flash {
+  animation: stinger-slam 800ms ease-out;
+}
+.ko-flash {
+  animation: stinger-slam 1400ms ease-out;
+}

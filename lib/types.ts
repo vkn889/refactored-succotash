@@ -17,15 +17,6 @@ export type ElementId =
 
 export type Build = "slim" | "normal" | "bulky" | "tank";
 
-/** Which imported Mixamo rig+animation set a character's 3D body uses (see
- * components/game/MixamoFighter.tsx). "vanguard" is defined for a future
- * second body but isn't wired to any character right now — its source FBX
- * hits a binary-format edge case three.js's FBXLoader can't parse
- * ("Unknown property type", verified via the thrown parse error), so every
- * roster fighter currently uses "ely", the one that actually loads,
- * recolored and given its own stats. */
-export type ModelKey = "vanguard" | "ely";
-
 export type Accessory =
   | "none"
   | "spikes"
@@ -41,9 +32,13 @@ export type Accessory =
   | "crown";
 
 export interface MoveConfig {
+  /** Display name shown in the special-move banner, e.g. "Chain Pull". */
+  name: string;
   damage: number;
-  animation: string;
   meterGain: number;
+  /** Launches a traveling elemental projectile across the stage instead of
+   * a close-range burst — most specials do. */
+  projectile?: boolean;
   cinematic?: boolean;
 }
 
@@ -55,9 +50,6 @@ export interface CharacterConfig {
   bio: string;
   health: number;
   build: Build;
-  /** Imported rig this character's 3D body uses — omitted for the boss
-   * model (Overmog), which always renders via BossFighter.tsx instead. */
-  modelKey?: ModelKey;
   accessory: Accessory;
   arenaId: string;
   voiceLine: string;
@@ -75,8 +67,8 @@ export interface CharacterConfig {
   isFinalBoss?: boolean;
   /** Mid-ladder story-mode gatekeeper — distinct from isFinalBoss. */
   isStoryBoss?: boolean;
-  /** True final boss uses an entirely different model (see BossFighter.tsx),
-   * not the standard per-character Fighter rig. */
+  /** True final boss renders as a non-humanoid sprite (see Fighter2D's boss
+   * branch) instead of the standard humanoid paper-doll rig. */
   useBossModel?: boolean;
 }
 
@@ -89,6 +81,10 @@ export interface ArenaConfig {
   era: ArenaEra;
   skyTop: string;
   skyBottom: string;
+  // fogColor/fogDensity/layout were 3D-only (fog volume, arena floor
+  // geometry variant) — no longer read by the 2D stage renderer. Left in
+  // place rather than stripped from all 12 arenas' data for a cosmetic-only
+  // cleanup.
   fogColor: string;
   fogDensity: number;
   floorColor: string;
@@ -98,12 +94,4 @@ export interface ArenaConfig {
   particle: "embers" | "snow" | "sparks" | "dust" | "petals" | "leaves" | "ash" | "motes";
   layout: "ring" | "rows" | "scattered" | "floating";
   description: string;
-}
-
-export interface LootItem {
-  id: number;
-  kind: "heal" | "stadium";
-  x: number;
-  z: number;
-  bornAt: number;
 }

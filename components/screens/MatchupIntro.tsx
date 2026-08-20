@@ -1,41 +1,27 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Canvas, useFrame } from "@react-three/fiber";
-import * as THREE from "three";
 import { useGameStore } from "@/lib/store";
 import { getCharacter } from "@/lib/combat";
 import { ARENAS } from "@/lib/arenas";
-import { type FighterFrame } from "@/lib/fighterFrame";
-import MixamoFighter from "@/components/game/MixamoFighter";
-import BossFighter from "@/components/game/BossFighter";
-import Arena from "@/components/game/Arena";
+import type { FighterFrame2D } from "@/lib/fighterFrame2d";
+import Fighter2D from "@/components/game/Fighter2D";
 import { audio } from "@/lib/audio";
 
-/** Swaps in the boss's own body for boss-model fights — see BossFighter.tsx
- * — otherwise the imported Mixamo rig every roster fighter uses. */
-function MatchFighter({ characterId, getFrame }: { characterId: string; getFrame: () => FighterFrame }) {
-  const Comp = getCharacter(characterId).useBossModel ? BossFighter : MixamoFighter;
-  return <Comp characterId={characterId} getFrame={getFrame} />;
-}
-
-const STATIC_FRAME = (x: number, z: number, faceX: number, faceZ: number): FighterFrame => ({
+const IDLE_FRAME = (facing: 1 | -1): FighterFrame2D => ({
   action: "idle",
   actionTotal: 0,
   actionTimer: 0,
-  chargeHeld: 0,
   meter: 0,
-  x,
-  z,
-  faceX,
-  faceZ,
+  x: 0,
+  y: 0,
+  facing,
   hitToken: 0,
 });
 
 /** A brief two-shot cutscene of the two fighters meeting before the round,
- * trading a line each (PRD follow-up: "opening cutscene... they will have
- * dialogue"). Runs once per match, in the chosen arena, then hands off to
- * FightScreen's countdown. */
+ * trading a line each. Runs once per match, in the chosen arena, then hands
+ * off to FightScreen's countdown. */
 export default function MatchupIntro({ onDone }: { onDone: () => void }) {
   const playerId = useGameStore((s) => s.playerId);
   const opponentId = useGameStore((s) => s.opponentId);
@@ -65,14 +51,21 @@ export default function MatchupIntro({ onDone }: { onDone: () => void }) {
   };
 
   return (
-    <div className="absolute inset-0 cursor-pointer bg-black" onClick={skip}>
-      <Canvas camera={{ position: [0, 1.7, 6.5], fov: 42, near: 0.1, far: 150 }} gl={{ antialias: true }} dpr={[1, 1.75]}>
-        <fog attach="fog" args={[arena.fogColor, 6, 40]} />
-        <Arena arena={arena} />
-        <MatchFighter characterId={playerId} getFrame={() => STATIC_FRAME(-1.9, 0, 1.9, 0)} />
-        <MatchFighter characterId={opponentId} getFrame={() => STATIC_FRAME(1.9, 0, -1.9, 0)} />
-        <IntroCameraDrift />
-      </Canvas>
+    <div className="absolute inset-0 cursor-pointer overflow-hidden bg-black" onClick={skip}>
+      <div
+        className="absolute inset-0 bg-cover bg-center"
+        style={{
+          backgroundImage: `linear-gradient(to bottom, ${arena.skyTop}22, ${arena.floorColor}66), url(/images/arenas/${arena.id}.jpg)`,
+        }}
+      />
+      <div className="absolute inset-x-0 bottom-0 flex h-[55%] items-end justify-center gap-6 px-8 pb-10 sm:gap-16">
+        <div className="h-full w-40 sm:w-56">
+          <Fighter2D characterId={playerId} getFrame={() => IDLE_FRAME(1)} />
+        </div>
+        <div className="h-full w-40 sm:w-56">
+          <Fighter2D characterId={opponentId} getFrame={() => IDLE_FRAME(-1)} />
+        </div>
+      </div>
 
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black via-transparent to-black/40" />
 
@@ -124,17 +117,6 @@ function DialogueLine({ visible, name, line, color, align }: { visible: boolean;
       </div>
     </div>
   );
-}
-
-function IntroCameraDrift() {
-  useFrame((state) => {
-    const t = state.clock.elapsedTime;
-    state.camera.position.x = Math.sin(t * 0.12) * 0.6;
-    state.camera.position.y = 1.7 + Math.sin(t * 0.2) * 0.05;
-    const target = new THREE.Vector3(0, 1.1, 0);
-    state.camera.lookAt(target);
-  });
-  return null;
 }
 
 function pick<T>(arr: T[]): T {

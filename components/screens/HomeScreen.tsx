@@ -6,11 +6,11 @@ import { audio } from "@/lib/audio";
 import { LORE_INTRO, CLOSING_LINE } from "@/lib/lore";
 import { ROSTER } from "@/lib/characters";
 import { ARENAS } from "@/lib/arenas";
-import AttractFight from "@/components/game/AttractFight";
 
 export default function HomeScreen() {
   const goSelect = useGameStore((s) => s.goSelect);
-  const goStorySelect = useGameStore((s) => s.goStorySelect);
+  const goStoryIntro = useGameStore((s) => s.goStoryIntro);
+  const goMultiplayerMenu = useGameStore((s) => s.goMultiplayerMenu);
   const [musicOn, setMusicOn] = useState(true);
   const [showLore, setShowLore] = useState(false);
 
@@ -28,20 +28,24 @@ export default function HomeScreen() {
     // Normal flowing page — the body scrolls (see app/layout.tsx / app/page.tsx),
     // this is intentionally NOT its own scroll container.
     <div className="relative flex w-full flex-1 flex-col overflow-x-hidden bg-black">
-      {/* ---- hero: cinematic live demo fight, exactly one viewport tall ---- */}
-      <section className="relative flex min-h-dvh w-full shrink-0 flex-col items-center justify-end overflow-hidden">
-        <div className="absolute inset-0">
-          <AttractFight />
-        </div>
+      {/* ---- hero: static branded backdrop, exactly one viewport tall ---- */}
+      <section className="relative flex min-h-dvh w-full shrink-0 flex-col items-center justify-start overflow-hidden">
+        <div
+          className="absolute inset-0"
+          style={{ background: "radial-gradient(ellipse 80% 60% at 50% 30%, #2a0f06 0%, #120503 55%, #050202 100%)" }}
+        />
+        <div className="pointer-events-none absolute left-1/2 top-1/3 h-[60vh] w-[60vh] -translate-x-1/2 -translate-y-1/2 rounded-full bg-orange-600/20 blur-[120px]" />
+        <div className="pointer-events-none absolute bottom-0 right-0 h-[40vh] w-[40vh] rounded-full bg-fuchsia-600/10 blur-[100px]" />
 
-        <div className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-black to-transparent" />
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[65%] bg-gradient-to-t from-black via-black/70 to-transparent" />
-
-        <div className="relative z-10 flex flex-col items-center gap-4 px-6 pb-10 text-center">
+        <div className="relative z-10 flex flex-col items-center gap-4 px-6 pt-10 text-center sm:pt-14">
           <div className="text-[10px] uppercase tracking-[0.5em] text-white/45">Welcome to the Mogsphere</div>
-          <h1 className="font-[family-name:var(--font-display)] text-6xl sm:text-7xl md:text-8xl tracking-wide text-white drop-shadow-[0_0_40px_rgba(255,120,60,0.45)]">
-            MOG <span className="text-orange-400">OFF</span>
-          </h1>
+          {/* eslint-disable-next-line @next/next/no-img-element -- small static
+              logo asset in `public/`, not worth next/image's overhead here */}
+          <img
+            src="/images/logo.png"
+            alt="Mog Off"
+            className="w-[min(90vw,640px)] drop-shadow-[0_0_35px_rgba(255,120,30,0.45)]"
+          />
 
           <div className="mt-2 flex flex-col items-center gap-3">
             <div className="flex flex-wrap items-center justify-center gap-3">
@@ -51,7 +55,7 @@ export default function HomeScreen() {
                   audio.playSfx("menu_confirm");
                   goSelect();
                 }}
-                className="group relative rounded-lg bg-gradient-to-br from-orange-500 to-red-600 px-10 py-3 text-lg font-[family-name:var(--font-display)] tracking-widest text-white shadow-[0_0_30px_rgba(255,90,30,0.4)] transition-transform hover:scale-105 active:scale-95"
+                className="arcade-panel arcade-panel-orange group relative px-10 py-3 text-lg font-[family-name:var(--font-display)] tracking-widest text-white transition-transform hover:scale-105 active:scale-95"
               >
                 ENTER THE RING
               </button>
@@ -59,11 +63,21 @@ export default function HomeScreen() {
                 onClick={() => {
                   audio.unlock();
                   audio.playSfx("menu_confirm");
-                  goStorySelect();
+                  goStoryIntro();
                 }}
-                className="group relative rounded-lg border border-fuchsia-400/50 bg-fuchsia-500/10 px-10 py-3 text-lg font-[family-name:var(--font-display)] tracking-widest text-white shadow-[0_0_30px_rgba(217,70,239,0.25)] transition-transform hover:scale-105 hover:bg-fuchsia-500/20 active:scale-95"
+                className="arcade-panel arcade-panel-purple group relative px-10 py-3 text-lg font-[family-name:var(--font-display)] tracking-widest text-white transition-transform hover:scale-105 active:scale-95"
               >
                 STORY MODE
+              </button>
+              <button
+                onClick={() => {
+                  audio.unlock();
+                  audio.playSfx("menu_confirm");
+                  goMultiplayerMenu();
+                }}
+                className="group relative rounded-lg border border-white/20 bg-white/5 px-10 py-3 text-lg font-[family-name:var(--font-display)] tracking-widest text-white transition-transform hover:scale-105 hover:bg-white/10 active:scale-95"
+              >
+                MULTIPLAYER
               </button>
             </div>
             <div className="flex items-center gap-4 text-xs uppercase tracking-widest text-white/40">
@@ -148,7 +162,7 @@ export default function HomeScreen() {
         </div>
 
         <div className="mt-16 text-center text-[10px] uppercase tracking-[0.3em] text-white/25">
-          First-person anime combat · Web build · v1.0 MVP
+          Retro 2D anime combat · Web build · v1.0 MVP
         </div>
       </section>
 

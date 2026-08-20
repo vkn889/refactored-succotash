@@ -4,15 +4,13 @@ import { useGameStore } from "@/lib/store";
 import { audio } from "@/lib/audio";
 
 const CONTROLS: { keys: string; action: string }[] = [
-  { keys: "Mouse", action: "Free look — turn and aim anywhere" },
-  { keys: "WASD", action: "Move relative to where you're looking" },
-  { keys: "Left Click", action: "Fire your gun — reticle turns red when it'll land" },
-  { keys: "R", action: "Reload once your magazine runs dry" },
-  { keys: "Right Click", action: "Punch — short range, forgiving aim" },
-  { keys: "Shift (hold)", action: "Block — chips damage down a lot" },
-  { keys: "Ctrl", action: "Dodge sideways" },
-  { keys: "Space", action: "Jump" },
-  { keys: "Hold E", action: "Charge your special once the meter is full — release to unleash it" },
+  { keys: "A / D", action: "Move left / right" },
+  { keys: "W", action: "Jump" },
+  { keys: "S (hold)", action: "Crouch" },
+  { keys: "J / Click", action: "Punch — fast, light" },
+  { keys: "K / Right-click", action: "Kick — slower, hits harder" },
+  { keys: "L (hold)", action: "Block — chips damage down a lot" },
+  { keys: "U", action: "Special, once your meter is full" },
   { keys: "Esc", action: "Pause" },
 ];
 
@@ -27,11 +25,9 @@ export default function TutorialOverlay() {
         <div className="text-xs uppercase tracking-[0.3em] text-orange-400/80">Before you step into the ring</div>
         <h2 className="mt-1 font-[family-name:var(--font-display)] text-3xl tracking-wide text-white">How to Fight</h2>
         <p className="mt-2 text-sm text-white/60">
-          Click the arena to lock your mouse and look freely — this is third-person, so you&apos;ll see your own
-          fighter over their shoulder. Every fighter carries a gun with a limited magazine — left click fires it,
-          the reticle turns red the instant it&apos;s close enough to land, and R reloads. Right click throws a
-          punch instead — shorter range, easier to land. Landing hits fills your meter; hold E once it&apos;s full
-          for your cinematic special.
+          Classic side-view fighting — you always face your opponent, no aiming required. Punch and kick to land
+          hits and build your meter; block to cut incoming damage way down. Once your meter is full, U unleashes
+          your character&apos;s signature special move.
         </p>
 
         <div className="mt-4 grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2">

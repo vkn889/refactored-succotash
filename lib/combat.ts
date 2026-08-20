@@ -1,74 +1,47 @@
 import { CHARACTERS } from "./characters";
 import type { Build, CharacterConfig, MoveConfig } from "./types";
 
-// Centralized combat resolver. Every character routes through these pure
-// functions so balancing the roster is a data change, not a code change.
+// Centralized combat resolver for the 2D retro fighter. Every character
+// routes through these pure functions so balancing the roster is a data
+// change, not a code change.
 //
-// FPS + melee: LMB fires each fighter's gun (hitscan, long range, needs real
-// aim), RMB throws a punch (the gun lives in the right hand, so the punch is
-// always a left-hand strike — see components/game/MixamoFighter.tsx's
-// "punch" clip). Both resolve the instant you press the button, checked
-// against where things actually are right then
-// (reach/range + a facing cone for the player's own attacks) — never
-// re-checked after some animation delay, which is what let clicks whiff
-// silently in the old weapon-swing system (position could change in the gap
-// between windup and the delayed hit-check).
+// Classic side-view fighting game rules: both fighters always face each
+// other (no free camera/aim to worry about), movement is a single
+// horizontal axis, and every attack resolves the instant the button is
+// pressed against wherever things actually are right then — never
+// re-checked after some animation delay, so a click can't whiff just
+// because someone moved during the windup.
 
-export interface Vec2 {
-  x: number;
-  z: number;
-}
-
-export function dist(a: Vec2, b: Vec2): number {
-  return Math.hypot(a.x - b.x, a.z - b.z);
-}
-
-export const ARENA = {
-  radius: 24, // movable floor radius; fighters are clamped a bit inside it
-  moveMargin: 2,
-  minSeparation: 0.75, // fighters can't fully overlap
+// A much bigger arena than a fixed-camera fighter needs — Stage2D's camera
+// follows the midpoint between fighters within this range instead of
+// showing the whole thing at once (see VIEW_WIDTH there), so the
+// background visibly scrolls as you close or open distance.
+export const STAGE = {
+  width: 32, // playable x range is roughly [-15.4, 15.4]
+  margin: 0.6,
+  minSeparation: 0.9, // fighters can't fully overlap
 };
+
+export type AttackKind = "punch" | "kick";
 
 export const RANGE = {
-  reach: 3.2, // generous melee reach — forgiving like Minecraft's attack range
-  facingConeRad: (60 * Math.PI) / 180, // player must be roughly looking at the target
-  playerSpeed: 4.6, // units/sec
-  aiSpeed: 3.6,
-  dodgeDistance: 1.6,
-};
-
-/** Every fighter carries one gun — no inventory, just a real ranged option
- * alongside the punch. Long reach, real fire-rate cooldown, a magazine that
- * empties and needs reloading, and an actual aim requirement (tighter cone
- * than melee — you have to be looking at your target, not just generally
- * facing them). `aimConeRad` does double duty as the aim-assist cone: the
- * reticle turns red exactly when a shot would land, so "red = it'll hit" is
- * always literally true, not a separate looser assist radius that lies. */
-export const GUN = {
-  damage: 16,
-  meterGain: 5,
-  range: 22,
-  aimConeRad: (18 * Math.PI) / 180,
-  cooldownMs: 320,
-  recoveryMs: 180, // recoil animation length — cosmetic, doesn't gate the next shot beyond cooldownMs
-};
-
-export const AMMO = {
-  magSize: 100,
-  reloadMs: 1500,
+  reach: 1.35, // melee reach for both punch and kick — forgiving, Minecraft-attack-range style
+  specialReach: 1.6, // close-range (non-projectile) specials get a little extra
+  moveSpeed: 5.2, // units/sec — faster than the old fixed-camera stage's 3.4, so crossing the bigger arena doesn't feel sluggish
+  aiSpeed: 4.4,
 };
 
 export const JUMP = {
-  velocity: 5.4, // units/sec, initial upward speed
-  gravity: 15, // units/sec^2
+  velocity: 5.2,
+  gravity: 15,
 };
 
-/** Shared base punch damage — per-character feel comes from BUILD_POWER
- * below (reusing each character's existing `build`), not a second set of
- * per-character numbers to maintain. */
-export const PUNCH = {
-  light: { damage: 14, meterGain: 4 },
-  heavy: { damage: 24, meterGain: 7 },
+/** Shared base punch/kick damage — per-character feel comes from
+ * BUILD_POWER below (reusing each character's existing `build`), not a
+ * second set of per-character numbers to maintain. */
+export const ATTACK: Record<AttackKind, { damage: number; meterGain: number }> = {
+  punch: { damage: 14, meterGain: 4 },
+  kick: { damage: 24, meterGain: 7 },
 };
 
 /** Bulkier builds hit harder and slower; slimmer builds hit lighter and
@@ -83,17 +56,26 @@ export const BUILD_POWER: Record<Build, { damage: number; speed: number }> = {
 };
 
 export const TIMING = {
-  light: { windup: 60, active: 70, recovery: 90 },
-  heavy: { windup: 110, active: 90, recovery: 170 },
-  block: { engage: 80 },
-  dodge: { duration: 260 },
-  hitstun_light: 200,
-  hitstun_heavy: 340,
-  chargeMin: 350,
-  chargeMax: 2200,
-  specialRelease: 1900,
+  punch: { windup: 60, active: 70, recovery: 90 },
+  kick: { windup: 110, active: 90, recovery: 170 },
+  hitstun_punch: 200,
+  hitstun_kick: 340,
+  specialWindup: 500,
   cooldown: 550,
 };
+
+/** Traveling projectile specials — see fireSpecial in lib/store.ts. */
+export const PROJECTILE = {
+  speed: 6.5, // units/sec
+  hitRadius: 0.55,
+};
+
+// The AI opponent always faces the player and never whiffs a decision the
+// way a badly-aimed human might — incoming AI damage is scaled down to
+// compensate, same idea as the old 3D version's gun-accuracy asymmetry,
+// just carried over as a flat difficulty knob now that there's no aiming
+// at all on either side. Player's own damage output is untouched.
+export const AI_DAMAGE_SCALE = 0.7;
 
 export function getCharacter(id: string): CharacterConfig {
   const c = CHARACTERS[id];
@@ -105,30 +87,12 @@ export function getSpecial(characterId: string): MoveConfig {
   return getCharacter(characterId).moves.special;
 }
 
-/** Damage + meter gain for a light/heavy punch, scaled by the character's
- * build. */
-export function getPunchMove(characterId: string, kind: "light" | "heavy") {
-  const base = PUNCH[kind];
+/** Damage + meter gain for a punch/kick, scaled by the character's build. */
+export function getAttackMove(characterId: string, kind: AttackKind) {
+  const base = ATTACK[kind];
   const power = BUILD_POWER[getCharacter(characterId).build];
   return { damage: Math.round(base.damage * power.damage), meterGain: base.meterGain };
 }
-
-/** Total swing animation length in ms, optionally scaled by a character's
- * build speed (bulkier = slower windup/recovery). Purely cosmetic — hit
- * detection never waits on this, see the comment at the top of the file. */
-export function attackDuration(kind: "light" | "heavy", characterId?: string): number {
-  const t = TIMING[kind];
-  const speed = characterId ? BUILD_POWER[getCharacter(characterId).build].speed : 1;
-  return (t.windup + t.active + t.recovery) / speed;
-}
-
-// The AI opponent's gun never misses (resolveShot in lib/store.ts skips the
-// aim-cone check entirely when there's no attackerYaw — it has no camera to
-// aim badly with), and it fires close to every decision tick. At parity
-// damage that's meaningfully harder than symmetric — the player has to
-// actually aim and can whiff, the AI can't. Scale incoming AI damage down to
-// compensate, without touching what the player's own attacks deal.
-export const AI_DAMAGE_SCALE = 0.55;
 
 /** Damage actually applied after block mitigation (chip damage still gets
  * through) and, for AI attacks specifically, the difficulty scale above. */

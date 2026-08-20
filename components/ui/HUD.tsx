@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useGameStore } from "@/lib/store";
-import { getCharacter, AMMO } from "@/lib/combat";
+import { getCharacter } from "@/lib/combat";
 import { audio } from "@/lib/audio";
 
 const ELEMENT_GLYPH: Record<string, string> = {
@@ -28,7 +28,8 @@ export default function HUD() {
   const opponentId = useGameStore((s) => s.opponentId);
   const matchTime = useGameStore((s) => s.matchTime);
   const openTutorial = useGameStore((s) => s.openTutorial);
-  const aimAssist = useGameStore((s) => s.aimAssist);
+  const roundWins = useGameStore((s) => s.roundWins);
+  const localMultiplayer = useGameStore((s) => s.localMultiplayer);
 
   const pChar = getCharacter(playerId);
   const oChar = getCharacter(opponentId);
@@ -42,9 +43,8 @@ export default function HUD() {
 
   if (phase !== "fight") return null;
 
-  const chargingSide = player.action === "charge" ? "player" : opponent.action === "charge" ? "opponent" : null;
   const specialSide = player.action === "special" ? "player" : opponent.action === "special" ? "opponent" : null;
-  const cinematicId = chargingSide === "player" || specialSide === "player" ? playerId : chargingSide || specialSide ? opponentId : null;
+  const cinematicId = specialSide === "player" ? playerId : specialSide === "opponent" ? opponentId : null;
   const cinematicChar = cinematicId ? getCharacter(cinematicId) : null;
 
   return (
@@ -66,6 +66,7 @@ export default function HUD() {
           combo={player.combo}
           align="left"
           color={pChar.colors.emissive}
+          wins={roundWins.player}
         />
         <div className="mt-1 shrink-0 rounded-md border border-white/10 bg-black/50 px-3 py-1 text-xl tabular-nums text-white backdrop-blur-sm font-[family-name:var(--font-display)] tracking-wider">
           {Math.ceil(matchTime)}
@@ -79,33 +80,12 @@ export default function HUD() {
           combo={opponent.combo}
           align="right"
           color={oChar.colors.emissive}
+          wins={roundWins.opponent}
         />
       </div>
 
-      {/* aim-assist reticle: a ring that closes in and turns red the instant
-          you're close enough to the opponent that firing would land — same
-          cone the shot itself is checked against (GUN.aimConeRad), so red
-          always means "this will hit." */}
-      <div
-        className={`absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 transition-[width,height,border-color] duration-100 ${
-          aimAssist ? "h-5 w-5 border-red-500 shadow-[0_0_10px_rgba(239,68,68,0.8)]" : "h-8 w-8 border-white/60"
-        }`}
-      />
-      <div className={`absolute left-1/2 top-1/2 h-1 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full ${aimAssist ? "bg-red-500" : "bg-white/70"}`} />
-
-      {/* ammo counter — just under the reticle, not the bottom controls hint */}
-      <div className="absolute left-1/2 top-[calc(50%+34px)] -translate-x-1/2 text-center">
-        {player.action === "reload" ? (
-          <div className="text-sm font-bold uppercase tracking-widest text-orange-400 drop-shadow">Reloading…</div>
-        ) : (
-          <div className="font-[family-name:var(--font-display)] text-lg tracking-wider text-white/90 drop-shadow tabular-nums">
-            {player.ammo} <span className="text-sm text-white/40">/ {AMMO.magSize}</span>
-          </div>
-        )}
-      </div>
-
-      {/* charge-up subtitle */}
-      {cinematicChar && (chargingSide || specialSide) && (
+      {/* special-move subtitle */}
+      {cinematicChar && specialSide && (
         <div className="absolute bottom-32 left-1/2 -translate-x-1/2 text-center">
           <div className="text-xs uppercase tracking-[0.3em] text-white/60">{cinematicChar.name}</div>
           <div
@@ -120,11 +100,21 @@ export default function HUD() {
       {showHint && (
         <div className="absolute bottom-8 left-1/2 -translate-x-1/2 max-w-[280px] rounded-md border border-white/10 bg-black/50 p-3 text-center text-[11px] leading-relaxed text-white/70 backdrop-blur-sm">
           <div className="mb-1 font-bold text-white/90">CONTROLS</div>
-          Click to lock mouse · Mouse look freely · WASD move
-          <br />
-          LMB shoot gun (red reticle = it&apos;ll land) · R reload · RMB punch
-          <br />
-          Shift block · Ctrl dodge · Space jump · Hold E special
+          {localMultiplayer ? (
+            <>
+              P1: ← → move · ↑ jump · ↓ crouch · / punch · &apos; kick · Enter special
+              <br />
+              P2: A/D move · W jump · S crouch · F punch · G kick · E special
+            </>
+          ) : (
+            <>
+              A / D move · W jump · S crouch
+              <br />
+              J / click punch · K / right-click kick · L block (hold)
+              <br />
+              U special (meter full)
+            </>
+          )}
         </div>
       )}
 
@@ -151,6 +141,7 @@ function FighterBar({
   combo,
   align,
   color,
+  wins,
 }: {
   name: string;
   element: string;
@@ -160,6 +151,7 @@ function FighterBar({
   combo: number;
   align: "left" | "right";
   color: string;
+  wins: number;
 }) {
   const pct = Math.max(0, (health / maxHealth) * 100);
   const [flash, setFlash] = useState(false);
@@ -180,6 +172,17 @@ function FighterBar({
 
   return (
     <div className={`flex-1 ${align === "right" ? "text-right" : "text-left"}`}>
+      {/* round-win pips — best of three, classic arcade-fighter tell for
+          "who needs one more" */}
+      <div className={`mb-0.5 flex items-center gap-1 ${align === "right" ? "flex-row-reverse" : ""}`}>
+        {[0, 1].map((i) => (
+          <div
+            key={i}
+            className="h-2 w-2 rotate-45 border"
+            style={{ background: i < wins ? color : "transparent", borderColor: color, boxShadow: i < wins ? `0 0 6px ${color}` : "none" }}
+          />
+        ))}
+      </div>
       <div className={`mb-1 flex items-center gap-1.5 ${align === "right" ? "flex-row-reverse" : ""}`}>
         <span className="text-sm opacity-80">{ELEMENT_GLYPH[element] ?? "●"}</span>
         <span className="text-xl uppercase tracking-wider text-white drop-shadow font-[family-name:var(--font-display)]">{name}</span>

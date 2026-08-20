@@ -21,7 +21,7 @@ const displayFont = Bebas_Neue({
 export const metadata: Metadata = {
   title: "Mog Off",
   description:
-    "A first-person anime fighting game. Twelve friends, twelve elemental powers, one arena that remembers everything.",
+    "A retro 2D anime fighting game. Eighteen friends, twelve elemental powers, one arena that remembers everything.",
 };
 
 export const viewport: Viewport = {
@@ -35,7 +35,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className={`${geistSans.variable} ${geistMono.variable} ${displayFont.variable} antialiased dark`}
     >
       {/* No height/overflow lock here — most screens are normal scrollable
-       * pages. Only the live 3D fight view locks the viewport, and it does
+       * pages. Only the live fight view locks the viewport, and it does
        * that itself (see app/page.tsx) rather than constraining every page. */}
       <body className="flex min-h-dvh flex-col bg-black text-white">{children}</body>
     </html>

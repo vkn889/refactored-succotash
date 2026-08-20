@@ -1,25 +1,22 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Canvas } from "@react-three/fiber";
 import { useGameStore } from "@/lib/store";
 import { ROSTER, CHARACTERS } from "@/lib/characters";
 import { ARENAS, ARENA_LIST } from "@/lib/arenas";
 import { BUILD_POWER } from "@/lib/combat";
 import { audio } from "@/lib/audio";
-import { type FighterFrame } from "@/lib/fighterFrame";
-import MixamoFighter from "@/components/game/MixamoFighter";
+import { type FighterFrame2D } from "@/lib/fighterFrame2d";
+import Fighter2D from "@/components/game/Fighter2D";
 
-const IDLE_FRAME: FighterFrame = {
+const IDLE_FRAME: FighterFrame2D = {
   action: "idle",
   actionTotal: 0,
   actionTimer: 0,
-  chargeHeld: 0,
   meter: 0,
   x: 0,
-  z: 0,
-  faceX: 0,
-  faceZ: 1,
+  y: 0,
+  facing: 1,
   hitToken: 0,
 };
 
@@ -36,6 +33,7 @@ export default function CharacterSelect({ storyMode = false }: { storyMode?: boo
   const goHome = useGameStore((s) => s.goHome);
   const startMatch = useGameStore((s) => s.startMatch);
   const startStoryRun = useGameStore((s) => s.startStoryRun);
+  const localMultiplayer = useGameStore((s) => s.localMultiplayer);
 
   const [step, setStep] = useState<Step>("fighter");
   const [playerId, setPlayerId] = useState("gautham");
@@ -45,7 +43,7 @@ export default function CharacterSelect({ storyMode = false }: { storyMode?: boo
 
   useEffect(() => {
     audio.unlock();
-    audio.playTheme();
+    audio.playMusic("stageSelect");
   }, []);
 
   // Story mode skips opponent/arena picking entirely — both are fixed by
@@ -81,9 +79,13 @@ export default function CharacterSelect({ storyMode = false }: { storyMode?: boo
           {storyMode
             ? "Choose Your Story Fighter"
             : effectiveStep === "fighter"
-              ? "Choose Your Fighter"
+              ? localMultiplayer
+                ? "Player 1 — Choose Your Fighter"
+                : "Choose Your Fighter"
               : effectiveStep === "opponent"
-                ? "Choose Your Opponent"
+                ? localMultiplayer
+                  ? "Player 2 — Choose Your Fighter"
+                  : "Choose Your Opponent"
                 : "Choose Your Arena"}
         </h2>
         <div className="w-16" />
@@ -156,14 +158,9 @@ function FighterStep({
 
   return (
     <div className="grid flex-1 grid-cols-1 gap-4 overflow-hidden px-6 pb-6 lg:grid-cols-[1fr_360px]">
-      {/* flex-wrap, not a fixed-column grid: the roster is temporarily
-          scoped to 2 fighters (see ROSTER_ORDER in lib/characters.ts)
-          while the Mixamo rigs get nailed down, and a grid with a column
-          count sized for twelve left two ghost columns of empty,
-          full-height stretched boxes next to the two real cards. Flex-wrap
-          with a fixed card width sizes to however many characters actually
-          exist — 2 today, back up to 12 later — without ever stretching
-          cards to fill leftover space. */}
+      {/* flex-wrap, not a fixed-column grid — sizes to however many
+          characters actually exist (18 currently) without ever stretching
+          cards to fill leftover space if the roster size changes again. */}
       <div className="flex flex-wrap content-start gap-3 overflow-y-auto pr-1">
         {ROSTER.map((c) => {
           const selected = c.id === selectedId;
@@ -200,24 +197,7 @@ function FighterStep({
 
       <div className="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-4">
         <div className="relative h-56 overflow-hidden rounded-lg bg-black">
-          {/* R3F's default camera auto-lookAt(0,0,0) when only `position` is
-              given (no explicit rotation) — so rather than fight that by
-              guessing a camera tilt, keep the camera level (same y as its
-              target: 0) and shift the CHARACTER down in PreviewRig instead,
-              so its vertical midpoint lands on the look-at target. */}
-          <Canvas camera={{ position: [0, 0, 3.4], fov: 40 }}>
-            {/* Generous lighting: unlike the arena scenes (which get natural
-                silhouette contrast from a bright floor/fog), this preview is
-                a bare black backdrop — several roster characters' outfits
-                are dark by design and would otherwise read as nearly
-                invisible against it. */}
-            <ambientLight intensity={2.2} />
-            <directionalLight position={[2, 3, 2.5]} intensity={3} />
-            <directionalLight position={[-2, 1.5, 2]} intensity={1.8} />
-            <pointLight position={[0, 1.2, 3.5]} intensity={2.5} distance={8} />
-            <pointLight position={[0, 1.4, 2]} intensity={1.2} color={preview.colors.emissive} />
-            <PreviewRig characterId={preview.id} />
-          </Canvas>
+          <Fighter2D characterId={preview.id} getFrame={() => IDLE_FRAME} />
           <div className="pointer-events-none absolute inset-0" style={{ background: "linear-gradient(to top, rgba(0,0,0,0.6), transparent 40%)" }} />
         </div>
 
@@ -239,7 +219,7 @@ function FighterStep({
 
         <button
           onClick={onNext}
-          className="mt-auto rounded-lg bg-gradient-to-br from-orange-500 to-red-600 py-3 font-[family-name:var(--font-display)] text-xl tracking-widest shadow-[0_0_25px_rgba(255,90,30,0.35)] transition-transform hover:scale-[1.02] active:scale-95"
+          className="mt-auto arcade-panel arcade-panel-orange py-3 font-[family-name:var(--font-display)] text-xl tracking-widest shadow-[0_0_25px_rgba(255,90,30,0.35)] transition-transform hover:scale-[1.02] active:scale-95"
         >
           {storyMode ? "BEGIN STORY" : step === "fighter" ? "NEXT: OPPONENT" : "NEXT: ARENA"}
         </button>
@@ -311,7 +291,7 @@ function ArenaStep({ arenaId, onPick, onFight }: { arenaId: string; onPick: (id:
 
         <button
           onClick={onFight}
-          className="mt-auto rounded-lg bg-gradient-to-br from-orange-500 to-red-600 py-3 font-[family-name:var(--font-display)] text-xl tracking-widest shadow-[0_0_25px_rgba(255,90,30,0.35)] transition-transform hover:scale-[1.02] active:scale-95"
+          className="mt-auto arcade-panel arcade-panel-orange py-3 font-[family-name:var(--font-display)] text-xl tracking-widest shadow-[0_0_25px_rgba(255,90,30,0.35)] transition-transform hover:scale-[1.02] active:scale-95"
         >
           FIGHT
         </button>
@@ -328,19 +308,6 @@ function Stat({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
-
-function PreviewRig({ characterId }: { characterId: string }) {
-  // Both rigs stand ~1.9-2.0 units tall, feet at y=0 (confirmed via a
-  // bounding-box check) — shift down by half that so the body's vertical
-  // midpoint sits at world y=0, matching the camera's implicit lookAt
-  // target (see the Canvas comment above).
-  return (
-    <group position={[0, -0.97, 0]}>
-      <MixamoFighter characterId={characterId} getFrame={() => IDLE_FRAME} staticPose />
-    </group>
-  );
-}
-
 
 function rollOpponent(excludeId: string): string {
   const options = ROSTER.filter((c) => c.id !== excludeId);
