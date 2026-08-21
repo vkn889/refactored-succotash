@@ -166,8 +166,11 @@ function draw(ctx: CanvasRenderingContext2D, t: number, dt: number, cameraXRef: 
   const oFacing = s.opponentX <= s.playerX ? 1 : -1;
 
   const fighters = [
-    { x: s.playerX, y: s.playerY, sel: pSel, facing: pFacing as 1 | -1, char: pChar, health: s.player.health, maxHealth: s.player.maxHealth },
-    { x: s.opponentX, y: s.opponentY, sel: oSel, facing: oFacing as 1 | -1, char: oChar, health: s.opponent.health, maxHealth: s.opponent.maxHealth },
+    { x: s.playerX, y: s.playerY, sel: pSel, facing: pFacing as 1 | -1, char: pChar, health: s.player.health, maxHealth: s.player.maxHealth, shadow: false },
+    // Shadow mode (lib/store.ts) is a mirror match against a black
+    // silhouette of your own character — only the opponent side ever
+    // renders as a shadow, never the player.
+    { x: s.opponentX, y: s.opponentY, sel: oSel, facing: oFacing as 1 | -1, char: oChar, health: s.opponent.health, maxHealth: s.opponent.maxHealth, shadow: s.shadowMode },
   ].sort((a, b) => a.x - b.x);
 
   for (const f of fighters) {
@@ -186,7 +189,7 @@ function draw(ctx: CanvasRenderingContext2D, t: number, dt: number, cameraXRef: 
       // purely visual scale bump, never touching hitbox/reach math.
       const bossScale = f.char.isStoryBoss ? 1.18 : 1;
       if (f.char.isStoryBoss) drawBossAura(ctx, f.char.colors, originX, GROUND_Y, FIGHTER_H * bossScale, t);
-      drawFighter(ctx, f.sel, f.char.colors, f.char.id, originX, GROUND_Y, FIGHTER_H * bossScale, f.facing, liftPx);
+      drawFighter(ctx, f.sel, f.char.colors, f.char.id, originX, GROUND_Y, FIGHTER_H * bossScale, f.facing, liftPx, f.shadow);
     }
   }
 

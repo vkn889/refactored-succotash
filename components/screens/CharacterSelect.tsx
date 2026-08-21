@@ -30,10 +30,11 @@ const BUILD_LABEL: Record<string, string> = {
   tank: "Slow & devastating",
 };
 
-export default function CharacterSelect({ storyMode = false }: { storyMode?: boolean }) {
+export default function CharacterSelect({ storyMode = false, shadowMode = false }: { storyMode?: boolean; shadowMode?: boolean }) {
   const goHome = useGameStore((s) => s.goHome);
   const startMatch = useGameStore((s) => s.startMatch);
   const startStoryRun = useGameStore((s) => s.startStoryRun);
+  const startShadowMatch = useGameStore((s) => s.startShadowMatch);
   const localMultiplayer = useGameStore((s) => s.localMultiplayer);
   const onlineRole = useGameStore((s) => s.onlineRole);
   const onlinePeerCharacterId = useGameStore((s) => s.onlinePeerCharacterId);
@@ -73,9 +74,13 @@ export default function CharacterSelect({ storyMode = false }: { storyMode?: boo
 
   // Story mode skips opponent/arena picking entirely — both are fixed by
   // the ladder (lib/story.ts) — so it never leaves the "fighter" step.
+  // Shadow mode is the same one-step shortcut for the same reason: the
+  // "opponent" is always a copy of whatever you just picked, so there's
+  // nothing to choose there, and it always fights in your own arena.
   // Online joiners likewise never see an "opponent"/"arena" step at all —
   // they only ever pick their own fighter (see JoinerWaitingPanel below).
-  const effectiveStep = storyMode || isJoiner ? "fighter" : step;
+  const singleStep = storyMode || shadowMode;
+  const effectiveStep = singleStep || isJoiner ? "fighter" : step;
 
   if (isJoiner && joinerReady) {
     return <JoinerWaitingPanel characterId={playerId} onChangeFighter={() => setJoinerReady(false)} onLeave={leaveOnline} />;
@@ -86,15 +91,15 @@ export default function CharacterSelect({ storyMode = false }: { storyMode?: boo
       <header className="flex items-center justify-between px-6 py-4">
         <button
           onClick={() => {
-            if (storyMode || isJoiner || effectiveStep === "fighter") leaveOnline();
+            if (singleStep || isJoiner || effectiveStep === "fighter") leaveOnline();
             else if (effectiveStep === "opponent") setStep("fighter");
             else setStep("opponent");
           }}
           className="text-xs uppercase tracking-widest text-white/40 hover:text-white/70"
         >
-          ← {storyMode || isJoiner || effectiveStep === "fighter" ? "Home" : "Back"}
+          ← {singleStep || isJoiner || effectiveStep === "fighter" ? "Home" : "Back"}
         </button>
-        {!storyMode && !isJoiner && (
+        {!singleStep && !isJoiner && (
           <div className="flex items-center gap-2">
             {(["fighter", "opponent", "arena"] as Step[]).map((s, i) => (
               <div key={s} className="flex items-center gap-2">
@@ -109,7 +114,9 @@ export default function CharacterSelect({ storyMode = false }: { storyMode?: boo
         <h2 className="font-[family-name:var(--font-display)] text-xl tracking-widest text-white/90">
           {storyMode
             ? "Choose Your Story Fighter"
-            : isJoiner
+            : shadowMode
+              ? "Choose Your Fighter"
+              : isJoiner
               ? "Choose Your Fighter"
               : effectiveStep === "fighter"
                 ? isHost
@@ -140,6 +147,7 @@ export default function CharacterSelect({ storyMode = false }: { storyMode?: boo
         <FighterStep
           step={effectiveStep}
           storyMode={storyMode}
+          shadowMode={shadowMode}
           isOnline={isHost || isJoiner}
           playerId={playerId}
           opponentId={opponentId}
@@ -159,6 +167,8 @@ export default function CharacterSelect({ storyMode = false }: { storyMode?: boo
             audio.playSfx("menu_confirm");
             if (storyMode) {
               startStoryRun(playerId);
+            } else if (shadowMode) {
+              startShadowMatch(playerId);
             } else if (isJoiner) {
               sendInput({ t: "select", characterId: playerId });
               setJoinerReady(true);
@@ -270,6 +280,7 @@ function JoinerWaitingPanel({
 function FighterStep({
   step,
   storyMode,
+  shadowMode,
   isOnline,
   playerId,
   opponentId,
@@ -280,6 +291,7 @@ function FighterStep({
 }: {
   step: "fighter" | "opponent";
   storyMode: boolean;
+  shadowMode: boolean;
   isOnline: boolean;
   playerId: string;
   opponentId: string;
@@ -362,7 +374,7 @@ function FighterStep({
           onClick={onNext}
           className="mt-auto arcade-panel arcade-panel-orange py-3 font-[family-name:var(--font-display)] text-xl tracking-widest shadow-[0_0_25px_rgba(255,90,30,0.35)] transition-transform hover:scale-[1.02] active:scale-95"
         >
-          {storyMode ? "BEGIN STORY" : isOnline ? "READY" : step === "fighter" ? "NEXT: OPPONENT" : "NEXT: ARENA"}
+          {storyMode ? "BEGIN STORY" : shadowMode ? "ENTER THE SHADOW" : isOnline ? "READY" : step === "fighter" ? "NEXT: OPPONENT" : "NEXT: ARENA"}
         </button>
       </div>
     </div>

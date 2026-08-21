@@ -8,13 +8,17 @@ import OnlineLobbyScreen from "@/components/screens/OnlineLobbyScreen";
 import CharacterSelect from "@/components/screens/CharacterSelect";
 import FightScreen from "@/components/screens/FightScreen";
 import ResultScreen from "@/components/screens/ResultScreen";
+import BattleRoyaleRoot from "@/components/screens/BattleRoyaleRoot";
 
 export default function Home() {
   const phase = useGameStore((s) => s.phase);
   // Only the live fight needs a locked, non-scrolling viewport (movement
   // keys like arrows/space would otherwise scroll the page). Every other
   // screen is a normal page that scrolls like the rest of the web.
-  const locked = phase === "fight";
+  // battle_royale is locked too — BattleRoyaleRoot owns everything from
+  // its own lobby screen through its own live fight, all of which need the
+  // same non-scrolling treatment as the 1v1 fight does.
+  const locked = phase === "fight" || phase === "battle_royale";
 
   return (
     <>
@@ -25,6 +29,8 @@ export default function Home() {
         {phase === "online_lobby" && <OnlineLobbyScreen />}
         {phase === "select" && <CharacterSelect />}
         {phase === "story_select" && <CharacterSelect storyMode />}
+        {phase === "shadow_select" && <CharacterSelect shadowMode />}
+        {phase === "battle_royale" && <BattleRoyaleRoot />}
         {phase === "fight" && <FightScreen />}
         {phase === "result" && <ResultScreen />}
       </main>

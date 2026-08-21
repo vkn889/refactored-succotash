@@ -10,6 +10,7 @@ export default function MultiplayerMenuScreen() {
   const goHome = useGameStore((s) => s.goHome);
   const goSelect = useGameStore((s) => s.goSelect);
   const goOnlineLobby = useGameStore((s) => s.goOnlineLobby);
+  const goBattleRoyale = useGameStore((s) => s.goBattleRoyale);
 
   useEffect(() => {
     audio.unlock();
@@ -55,6 +56,16 @@ export default function MultiplayerMenuScreen() {
         >
           <span className="font-[family-name:var(--font-display)] text-2xl tracking-widest">ONLINE</span>
           <span className="text-xs text-white/70">Host or join with a code</span>
+        </button>
+        <button
+          onClick={() => {
+            audio.playSfx("menu_confirm");
+            goBattleRoyale();
+          }}
+          className="arcade-panel arcade-panel-purple flex w-72 flex-col items-center gap-1 px-8 py-5 text-white transition-transform hover:scale-105 active:scale-95"
+        >
+          <span className="font-[family-name:var(--font-display)] text-2xl tracking-widest">BATTLE ROYALE</span>
+          <span className="text-xs text-white/70">Up to 8 players, one arena, last one standing</span>
         </button>
       </div>
     </div>

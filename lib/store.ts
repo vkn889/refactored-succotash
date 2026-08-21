@@ -30,15 +30,17 @@ import { audio } from "./audio";
 import { ARENAS } from "./arenas";
 import { STORY_LADDER } from "./story";
 import { loadStorySave, saveStoryProgress, clearStorySave } from "./storySave";
-import { DIFFICULTIES, readDifficulty, saveDifficulty, type DifficultyId } from "./difficulty";
+import { DEFAULT_DIFFICULTY, DIFFICULTIES, saveDifficulty, type DifficultyId } from "./difficulty";
 
 export type MatchPhase =
   | "home"
   | "select"
   | "story_intro"
   | "story_select"
+  | "shadow_select"
   | "multiplayer_menu"
   | "online_lobby"
+  | "battle_royale"
   | "fight"
   | "result";
 export type ActionState =
@@ -206,6 +208,14 @@ interface GameState {
   storyIndex: number; // index into STORY_LADDER of the fight currently in progress
   storyPlayerId: string | null;
 
+  // --- shadow mode: a mirror match against a black silhouette of your own
+  // character, same moveset/stats on both sides. Stage2D reads this to
+  // recolor the opponent's sprite pure black instead of its normal
+  // per-character hue-rotate (see spriteFilterFor/drawFighter). ---
+  shadowMode: boolean;
+  goShadowSelect: () => void;
+  startShadowMatch: (characterId: string) => void;
+
   // --- local same-keyboard 2P: opponent is human-controlled (see
   // components/game/LocalMultiplayerInput.tsx) instead of AI. Online
   // multiplayer is a separate mode (see lib/online.ts) that doesn't touch
@@ -226,6 +236,7 @@ interface GameState {
   goStorySelect: () => void;
   goMultiplayerMenu: () => void; // local vs online choice
   goOnlineLobby: () => void; // host/join-code screen
+  goBattleRoyale: () => void; // hands off entirely to BattleRoyaleRoot/useBRStore — see lib/storeBR.ts
   startMatch: (playerId: string, opponentId: string, arenaId?: string) => void;
   nextRound: () => void; // called after a non-final round ends — same match, next round
   startStoryRun: (playerId: string) => void; // New Game — clears any existing save
@@ -380,9 +391,18 @@ export const useGameStore = create<GameState>((set, get) => ({
   storyActive: false,
   storyIndex: 0,
   storyPlayerId: null,
+  shadowMode: false,
   localMultiplayer: false,
 
-  difficulty: readDifficulty(),
+  // Always the deterministic default at init — reading localStorage here
+  // would differ between the server's render (no window, falls back to
+  // the default) and the client's very first hydration pass (module-level
+  // code runs before React even mounts, so it'd already have the real
+  // persisted value), which is exactly the "server text didn't match
+  // client text" hydration mismatch HomeScreen's difficulty label used to
+  // hit. The real value is loaded client-side, post-hydration, via
+  // HomeScreen's own effect instead (see its readDifficulty() call).
+  difficulty: DEFAULT_DIFFICULTY,
   setDifficulty: (id) => {
     saveDifficulty(id);
     set({ difficulty: id });
@@ -403,8 +423,10 @@ export const useGameStore = create<GameState>((set, get) => ({
     set({ phase: "select", storyActive: false, storyIndex: 0, storyPlayerId: null, localMultiplayer }),
   goStoryIntro: () => set({ phase: "story_intro" }),
   goStorySelect: () => set({ phase: "story_select" }),
+  goShadowSelect: () => set({ phase: "shadow_select" }),
   goMultiplayerMenu: () => set({ phase: "multiplayer_menu" }),
   goOnlineLobby: () => set({ phase: "online_lobby" }),
+  goBattleRoyale: () => set({ phase: "battle_royale" }),
 
   startStoryRun: (playerId) => {
     clearStorySave(); // New Game always starts a fresh save, overwriting any prior run
@@ -412,6 +434,17 @@ export const useGameStore = create<GameState>((set, get) => ({
     set({ storyActive: true, storyIndex: 0, storyPlayerId: playerId });
     const firstOpponent = STORY_LADDER[0];
     get().startMatch(playerId, firstOpponent, getCharacter(firstOpponent).arenaId);
+  },
+
+  // Shadow mode — a mirror match, same character/stats/moveset on both
+  // sides, opponent rendered as a black silhouette (see Stage2D). Reuses
+  // startMatch entirely for setup (fresh health/position/etc.), just with
+  // playerId===opponentId, then flips shadowMode on right after — startMatch
+  // itself always clears shadowMode to false, so a normal match started
+  // later never accidentally carries this over.
+  startShadowMatch: (characterId) => {
+    get().startMatch(characterId, characterId, getCharacter(characterId).arenaId);
+    set({ shadowMode: true });
   },
 
   resumeStoryRun: () => {
@@ -474,6 +507,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       projectiles: [],
       comboCallout: null,
       finisher: null,
+      shadowMode: false, // cleared here so a normal match started after a shadow one never keeps the black-silhouette render
       paused: !tutorialSeen,
       showTutorial: !tutorialSeen,
     });

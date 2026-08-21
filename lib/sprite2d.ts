@@ -41,7 +41,8 @@ export function drawFighter(
   groundY: number,
   heightPx: number,
   facing: 1 | -1,
-  liftPx = 0
+  liftPx = 0,
+  shadow = false
 ) {
   ctx.save();
   ctx.translate(groundX, groundY);
@@ -78,7 +79,11 @@ export function drawFighter(
 
   ctx.scale(-facing, 1);
   if (img) {
-    ctx.filter = spriteFilterFor(characterId, colors);
+    // Shadow mode: a flat black silhouette instead of the normal
+    // per-character hue-rotate recolor — brightness(0) crushes every pixel
+    // to black while leaving the sprite's own alpha (its outline) intact,
+    // which is the standard CSS-filter silhouette trick.
+    ctx.filter = shadow ? "brightness(0)" : spriteFilterFor(characterId, colors);
     ctx.drawImage(img, sel.frameIndex * row.w, 0, row.w, row.h, -destW / 2, -destH, destW, destH);
     ctx.filter = "none";
   } else {

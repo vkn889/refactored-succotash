@@ -6,12 +6,13 @@ import { audio } from "@/lib/audio";
 import { LORE_INTRO, CLOSING_LINE } from "@/lib/lore";
 import { ROSTER } from "@/lib/characters";
 import { ARENAS } from "@/lib/arenas";
-import { DIFFICULTIES, DIFFICULTY_ORDER } from "@/lib/difficulty";
+import { DIFFICULTIES, DIFFICULTY_ORDER, readDifficulty } from "@/lib/difficulty";
 
 export default function HomeScreen() {
   const goSelect = useGameStore((s) => s.goSelect);
   const goStoryIntro = useGameStore((s) => s.goStoryIntro);
   const goMultiplayerMenu = useGameStore((s) => s.goMultiplayerMenu);
+  const goShadowSelect = useGameStore((s) => s.goShadowSelect);
   const difficulty = useGameStore((s) => s.difficulty);
   const setDifficulty = useGameStore((s) => s.setDifficulty);
   const [musicOn, setMusicOn] = useState(true);
@@ -26,6 +27,16 @@ export default function HomeScreen() {
     audio.setThemeVolume(0.55);
     audio.playTheme();
     audio.preloadSfx();
+
+    // The store's own `difficulty` starts at the SSR-safe default (see
+    // lib/store.ts) so server and client render the same thing on first
+    // paint — the real persisted preference is only ever read here, after
+    // hydration, where a mismatch can't happen. A user with a saved
+    // non-default difficulty will briefly see "Fighter" flash to their
+    // real choice on load; that's the correct trade-off for avoiding a
+    // hydration error, not a bug.
+    setDifficulty(readDifficulty());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
@@ -85,6 +96,17 @@ export default function HomeScreen() {
               </button>
             </div>
             <div className="flex items-center gap-4 text-xs uppercase tracking-widest text-white/40">
+              <button
+                onClick={() => {
+                  audio.unlock();
+                  audio.playSfx("menu_select");
+                  goShadowSelect();
+                }}
+                className="hover:text-white/70"
+              >
+                Shadow Mode
+              </button>
+              <span className="text-white/20">·</span>
               <button onClick={() => setShowLore(true)} className="hover:text-white/70">
                 The Story
               </button>
