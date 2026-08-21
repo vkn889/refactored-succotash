@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useGameStore } from "@/lib/store";
-import { getCharacter } from "@/lib/combat";
+import { getCharacter, COMEBACK } from "@/lib/combat";
 import { audio } from "@/lib/audio";
 
 const ELEMENT_GLYPH: Record<string, string> = {
@@ -127,9 +127,9 @@ export default function HUD() {
           <div className="mb-1 font-bold text-white/90">CONTROLS</div>
           {twoKeyboardSplit ? (
             <>
-              P1: ← → move · ↑ jump · ↓ crouch · / punch · &apos; kick · Enter special
+              P1: ← → move · ↑ jump · ↓ crouch · / punch · &apos; kick · Enter special · \ throw
               <br />
-              P2: A/D move · W jump · S crouch · F punch · G kick · E special
+              P2: A/D move · W jump · S crouch · F punch · G kick · E special · R throw
             </>
           ) : (
             <>
@@ -137,7 +137,9 @@ export default function HUD() {
               <br />
               J / click punch · K / right-click kick · S+K sweep · W+K jump kick
               <br />
-              L block (hold) · U special (meter full)
+              L block (hold) · U special (meter full) · I throw (beats block)
+              <br />
+              Block right as a hit lands to parry it for free
             </>
           )}
         </div>
@@ -179,6 +181,11 @@ function FighterBar({
   wins: number;
 }) {
   const pct = Math.max(0, (health / maxHealth) * 100);
+  // "Real Mog" comeback state (see COMEBACK in lib/combat.ts) — below
+  // threshold, this fighter's own attacks hit harder and build meter
+  // faster. Purely a read of health/maxHealth already passed in, no new
+  // store plumbing needed.
+  const comeback = health > 0 && health / maxHealth < COMEBACK.healthThreshold;
   const [flash, setFlash] = useState(false);
   const prevHealth = useRef(health);
 
@@ -219,8 +226,16 @@ function FighterBar({
             {combo} HITS
           </span>
         )}
+        {comeback && (
+          <span className="animate-pulse rounded-full border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide" style={{ borderColor: color, color }}>
+            Real Mog
+          </span>
+        )}
       </div>
-      <div className="relative h-3.5 w-full overflow-hidden rounded-sm border border-white/15 bg-black/60" style={{ clipPath: "polygon(0 0, 100% 0, 96% 100%, 0% 100%)" }}>
+      <div
+        className={`relative h-3.5 w-full overflow-hidden rounded-sm border bg-black/60 ${comeback ? "animate-pulse" : "border-white/15"}`}
+        style={{ clipPath: "polygon(0 0, 100% 0, 96% 100%, 0% 100%)", borderColor: comeback ? color : undefined, boxShadow: comeback ? `0 0 10px ${color}` : "none" }}
+      >
         {/* damage trail: lags behind on a slower transition so recent chip damage visibly catches up */}
         <div
           className="absolute inset-y-0 left-0 bg-yellow-300/70 transition-[width] duration-700 ease-out"

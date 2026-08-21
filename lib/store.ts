@@ -4,9 +4,12 @@ import { create } from "zustand";
 import {
   getCharacter,
   getAttackMove,
+  getThrowMove,
   getSpecial,
   resolveDamage,
   meterAfterHit,
+  moveSpeedFor,
+  elementEffectFor,
   TIMING,
   RANGE,
   STAGE,
@@ -14,6 +17,10 @@ import {
   PROJECTILE,
   COMBOS,
   COMBO_WINDOW_MS,
+  COMBO_SCALING,
+  COMEBACK,
+  PARRY,
+  BASE_KNOCKBACK,
   type AttackKind,
   type AttackProfile,
   type ComboDef,
@@ -40,6 +47,7 @@ export type ActionState =
   | "crouch"
   | "punch"
   | "kick"
+  | "throw"
   | "block"
   | "hitstun"
   | "special"
@@ -65,6 +73,32 @@ export interface FighterRuntime {
   /** Increments on every landed, non-blocked hit this fighter takes —
    * Fighter2D watches this to trigger a knockback/flash impulse. */
   hitToken: number;
+  // --- elemental status (see ELEMENT_EFFECTS in lib/combat.ts) ---
+  /** Fire's damage-over-time: ticksLeft counts down once per burnTickTimer
+   * expiry (processed in tick()), independent of this fighter's own
+   * action/hitstun — burning keeps ticking even through a block. */
+  burnTicksLeft: number;
+  burnTickTimer: number; // ms until the next tick
+  burnDamage: number; // chip damage applied per tick
+  /** Ice's slow: while slowMsLeft > 0, this fighter's own move speed is
+   * multiplied by slowFactor (read in move/move2/runAI's speed calc). */
+  slowMsLeft: number;
+  slowFactor: number;
+}
+
+/** Set once, on the actual match-deciding blow (see tick()'s winner/
+ * matchOver block) — FightScreen renders FinisherSequence.tsx while this
+ * is non-null instead of letting the normal phase:"result" transition
+ * happen immediately, so the winner's finishing blow gets one dramatic
+ * beat before the scoreboard. `kind:"special"` (the blow was a meter
+ * special — every character's `moves.special.cinematic` flag exists for
+ * exactly this) gets the bigger, longer treatment; `kind:"normal"` (any
+ * other match-ending hit — a plain punch/kick, a combo finisher, or a
+ * throw) still gets a real beat, just a shorter/simpler one. */
+export interface FinisherInfo {
+  winnerSide: "player" | "opponent";
+  kind: "special" | "normal";
+  moveName: string;
 }
 
 export interface HitEvent {
@@ -72,6 +106,11 @@ export interface HitEvent {
   kind: "punch" | "kick" | "special" | "block";
   side: "player" | "opponent";
   t: number;
+  /** Actual damage dealt (0 for a pure release-timing event like a
+   * special's own hit-event, which fires on windup-end rather than
+   * confirmed connect) — Stage2D.tsx uses this for the floating
+   * damage-number popup and to size the hit-spark burst. */
+  damage: number;
 }
 
 /** A traveling elemental projectile special — see fireSpecial. */
@@ -120,6 +159,13 @@ interface GameState {
    * (a plain string/id wouldn't, since React state "changing" to the same
    * value doesn't re-fire an effect). Null when no callout is showing. */
   comboCallout: { label: string; side: "player" | "opponent"; token: number } | null;
+  /** Non-null exactly while FinisherSequence.tsx is holding the screen for
+   * the match-deciding blow — see FinisherInfo and tick()'s winner/
+   * matchOver block. `resolveFinisher()` is what actually flips phase to
+   * "result" once the cutscene is done; tick() itself withholds that
+   * transition while this is set. */
+  finisher: FinisherInfo | null;
+  resolveFinisher: () => void;
   musicUnlocked: boolean;
   paused: boolean;
   tutorialSeen: boolean;
@@ -194,6 +240,7 @@ interface GameState {
   // --- player 1 input ---
   punch: () => void;
   kick: () => void;
+  throwAttack: () => void; // named to avoid colliding with the `throw` keyword
   setBlocking: (on: boolean) => void;
   setCrouching: (on: boolean) => void;
   jump: () => void;
@@ -204,6 +251,7 @@ interface GameState {
   // side directly instead of AI; see localMultiplayer above) ---
   punch2: () => void;
   kick2: () => void;
+  throw2: () => void;
   setBlocking2: (on: boolean) => void;
   setCrouching2: (on: boolean) => void;
   jump2: () => void;
@@ -236,6 +284,11 @@ function freshFighter(characterId: string): FighterRuntime {
     actionTotal: 0,
     attackStance: null,
     hitToken: 0,
+    burnTicksLeft: 0,
+    burnTickTimer: 0,
+    burnDamage: 0,
+    slowMsLeft: 0,
+    slowFactor: 1,
   };
 }
 
@@ -302,6 +355,12 @@ export const useGameStore = create<GameState>((set, get) => ({
   hitEvents: [],
   projectiles: [],
   comboCallout: null,
+  finisher: null,
+  resolveFinisher: () => {
+    audio.stopAmbient();
+    audio.playMusic("theme");
+    set({ finisher: null, phase: "result" });
+  },
   musicUnlocked: false,
   paused: false,
   tutorialSeen: readTutorialSeen(),
@@ -414,6 +473,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       hitEvents: [],
       projectiles: [],
       comboCallout: null,
+      finisher: null,
       paused: !tutorialSeen,
       showTutorial: !tutorialSeen,
     });
@@ -448,6 +508,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       hitEvents: [],
       projectiles: [],
       comboCallout: null,
+      finisher: null,
       paused: false,
     });
   },
@@ -474,11 +535,13 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   punch: () => attemptAttack(set, get, "punch"),
   kick: () => attemptAttack(set, get, "kick"),
+  throwAttack: () => attemptThrow(set, get, "player"),
 
   setBlocking: (on) =>
     set((s) => {
       if (on) {
         if (s.player.action !== "idle" && s.player.action !== "walk" && s.player.action !== "crouch") return {};
+        blockPressedAt.player = performance.now(); // edge-triggered (only real keydowns reach here) — see PARRY.windowMs
         return { player: { ...s.player, action: "block", actionTimer: 0, actionTotal: 0 } };
       }
       if (s.player.action !== "block") return {};
@@ -514,12 +577,15 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   // Single horizontal axis, camera-free: dir is -1 (toward own left) or 1
   // (toward own right) on screen. Blocking/crouching hold you in place,
-  // same as every other side-view fighter.
+  // same as every other side-view fighter. Speed is this character's own
+  // (element-passive-adjusted, see moveSpeedFor) base speed, further
+  // scaled down while iced/slowed (see ELEMENT_EFFECTS.ice).
   move: (dir, dtSec) =>
     set((s) => {
       if (s.phase !== "fight" || s.paused || dir === 0) return {};
       if (!(s.player.action === "idle" || s.player.action === "walk")) return {};
-      const speed = RANGE.moveSpeed * dtSec;
+      const slow = s.player.slowMsLeft > 0 ? s.player.slowFactor : 1;
+      const speed = moveSpeedFor(s.playerId) * slow * dtSec;
       const nextX = resolveMoveX(s.playerX + dir * speed, s.opponentX);
       return { playerX: nextX, player: { ...s.player, action: "walk" } };
     }),
@@ -533,11 +599,13 @@ export const useGameStore = create<GameState>((set, get) => ({
   // duplicated here.
   punch2: () => attemptAttack2(set, get, "punch"),
   kick2: () => attemptAttack2(set, get, "kick"),
+  throw2: () => attemptThrow(set, get, "opponent"),
 
   setBlocking2: (on) =>
     set((s) => {
       if (on) {
         if (s.opponent.action !== "idle" && s.opponent.action !== "walk" && s.opponent.action !== "crouch") return {};
+        blockPressedAt.opponent = performance.now();
         return { opponent: { ...s.opponent, action: "block", actionTimer: 0, actionTotal: 0 } };
       }
       if (s.opponent.action !== "block") return {};
@@ -570,7 +638,8 @@ export const useGameStore = create<GameState>((set, get) => ({
     set((s) => {
       if (s.phase !== "fight" || s.paused || dir === 0) return {};
       if (!(s.opponent.action === "idle" || s.opponent.action === "walk")) return {};
-      const speed = RANGE.moveSpeed * dtSec;
+      const slow = s.opponent.slowMsLeft > 0 ? s.opponent.slowFactor : 1;
+      const speed = moveSpeedFor(s.opponentId) * slow * dtSec;
       const nextX = resolveMoveX(s.opponentX + dir * speed, s.playerX);
       return { opponentX: nextX, opponent: { ...s.opponent, action: "walk" } };
     }),
@@ -619,6 +688,13 @@ export const useGameStore = create<GameState>((set, get) => ({
     if (player.action === "walk") player = { ...player, action: "idle" };
     if (opponent.action === "walk") opponent = { ...opponent, action: "idle" };
 
+    // Elemental status: fire's burn ticks and ice's slow both decay purely
+    // on the clock, independent of whatever action either fighter is
+    // currently in (burning keeps ticking through a block; a slow keeps
+    // counting down even mid-hitstun) — see ELEMENT_EFFECTS in lib/combat.ts.
+    player = tickStatus(player, dtMs);
+    opponent = tickStatus(opponent, dtMs);
+
     let winner = s.winner;
     let phase: MatchPhase = s.phase;
     if (player.health <= 0 && !winner) {
@@ -641,15 +717,38 @@ export const useGameStore = create<GameState>((set, get) => ({
       roundWins = { ...s.roundWins, [winner]: s.roundWins[winner] + 1 };
       matchOver = roundWins.player >= ROUNDS_TO_WIN || roundWins.opponent >= ROUNDS_TO_WIN;
     }
+
+    // The instant this tick is the one that actually decided the WHOLE
+    // match (not just a round), hand off to a finisher cutscene instead of
+    // jumping straight to the result screen — see FinisherInfo. `lastHit`
+    // (set at the end of resolveAttack/applySpecialHit/resolveThrow) is
+    // whatever landed the killing blow; a special gets the bigger beat.
+    let finisher = s.finisher;
+    if (winner && winner !== "draw" && !s.winner && matchOver && !finisher) {
+      const winnerId = winner === "player" ? s.playerId : s.opponentId;
+      finisher = {
+        winnerSide: winner,
+        kind: lastHit.kind ?? "normal",
+        moveName: lastHit.kind === "special" && lastHit.moveName ? lastHit.moveName : getSpecial(winnerId).name,
+      };
+    }
+
     if (winner) {
-      phase = "result";
-      // Only swap back to the home theme once the whole match is decided —
-      // between rounds (matchOver still false) the battle music keeps
-      // playing straight through the round-transition screen instead of
-      // blipping back to the theme for the ~2s before nextRound() resumes it.
-      if (matchOver) {
-        audio.stopAmbient();
-        audio.playMusic("theme");
+      if (matchOver && finisher) {
+        // Hold at phase "fight" — FightScreen renders FinisherSequence
+        // while `finisher` is set, and its onDone calls resolveFinisher()
+        // (the host's copy only, in online play) once the cutscene is
+        // done, which is what actually performs this transition.
+      } else {
+        phase = "result";
+        // Only swap back to the home theme once the whole match is decided —
+        // between rounds (matchOver still false) the battle music keeps
+        // playing straight through the round-transition screen instead of
+        // blipping back to the theme for the ~2s before nextRound() resumes it.
+        if (matchOver) {
+          audio.stopAmbient();
+          audio.playMusic("theme");
+        }
       }
     }
 
@@ -668,6 +767,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       winner,
       roundWins,
       matchOver,
+      finisher,
     });
 
     stepProjectiles(set, get, dtMs);
@@ -700,6 +800,33 @@ function stepFighter(f: FighterRuntime, dtMs: number): FighterRuntime {
   const timer = f.actionTimer - dtMs;
   if (timer > 0) return { ...f, actionTimer: timer };
   return { ...f, action: "idle", actionTimer: 0, actionTotal: 0 };
+}
+
+const BURN_TICK_INTERVAL_MS = 500;
+
+/** Advances fire's burn-over-time and ice's slow-timer, purely on the
+ * clock — called every tick() for both fighters regardless of what action
+ * either one is currently in (see FighterRuntime's own status-field
+ * comments for why burning/slowed don't pause for a block or hitstun). */
+function tickStatus(f: FighterRuntime, dtMs: number): FighterRuntime {
+  let next = f;
+  if (next.burnTicksLeft > 0) {
+    const timer = next.burnTickTimer - dtMs;
+    if (timer <= 0) {
+      next = {
+        ...next,
+        health: clamp(next.health - next.burnDamage, 0, next.maxHealth),
+        burnTicksLeft: next.burnTicksLeft - 1,
+        burnTickTimer: BURN_TICK_INTERVAL_MS,
+      };
+    } else {
+      next = { ...next, burnTickTimer: timer };
+    }
+  }
+  if (next.slowMsLeft > 0) {
+    next = { ...next, slowMsLeft: Math.max(0, next.slowMsLeft - dtMs) };
+  }
+  return next;
 }
 
 /** A fighter's current stance for attack-resolution purposes: airborne
@@ -746,6 +873,100 @@ function attemptAttack2(set: SetFn, get: GetFn, kind: AttackKind) {
   resolveAttack(set, get, "opponent", kind, stance, move);
 }
 
+/** Throw — same instant-resolve-on-press discipline as a punch/kick, gated
+ * the same way (idle/walk/crouch only), but goes through resolveThrow
+ * instead of resolveAttack: no block check at all (a throw's whole point
+ * is beating a turtling opponent), no combo-string buffer, bigger
+ * knockback. Handles BOTH sides itself (unlike attemptAttack/
+ * attemptAttack2's P1/P2 split) since there's no per-side special-casing
+ * needed here beyond the existing `side` parameter every shared helper
+ * already takes. */
+function attemptThrow(set: SetFn, get: GetFn, side: "player" | "opponent") {
+  const s = get();
+  if (s.phase !== "fight" || s.paused) return;
+  const fighter = side === "player" ? s.player : s.opponent;
+  const characterId = side === "player" ? s.playerId : s.opponentId;
+  if (fighter.action !== "idle" && fighter.action !== "walk" && fighter.action !== "crouch") return;
+  const move = getThrowMove(characterId);
+  audio.unlock();
+  set({
+    [side]: { ...fighter, action: "throw", actionTimer: move.totalMs, actionTotal: move.totalMs, attackStance: null },
+  } as Partial<GameState>);
+  resolveThrow(set, get, side, move);
+}
+
+function resolveThrow(set: SetFn, get: GetFn, side: "player" | "opponent", move: AttackProfile) {
+  const s = get();
+  const attackerId = side === "player" ? s.playerId : s.opponentId;
+  const defenderId = side === "player" ? s.opponentId : s.playerId;
+  const attacker = side === "player" ? s.player : s.opponent;
+  const defender = side === "player" ? s.opponent : s.player;
+  const defenderSide = side === "player" ? "opponent" : "player";
+
+  const attackerX = side === "player" ? s.playerX : s.opponentX;
+  const defenderX = side === "player" ? s.opponentX : s.playerX;
+  if (Math.abs(defenderX - attackerX) > move.reach) return; // whiffed — opponent stepped out of true grab range
+
+  let dmg = resolveDamage(move.damage, false, aiDamageScaleFor(s, side)); // throws ignore block entirely — never mitigated
+  let meterGain = move.meterGain;
+
+  const attackerComeback = attacker.health / attacker.maxHealth < COMEBACK.healthThreshold;
+  if (attackerComeback) {
+    dmg = Math.round(dmg * COMEBACK.damageMult);
+    meterGain = Math.round(meterGain * COMEBACK.meterMult);
+  }
+  const atkFx = elementEffectFor(attackerId);
+  void defenderId; // throws skip steel's chip-reduction entirely — there's no chip here, it's never mitigated
+  if (atkFx.meterMult) meterGain = Math.round(meterGain * atkFx.meterMult);
+
+  const newHealth = clamp(defender.health - dmg, 0, defender.maxHealth);
+  const newAttackerMeter = meterAfterHit(attacker.meter, meterGain);
+
+  // Throws reposition hard — a real toss, not a shove — before applying
+  // any elemental bonus knockback on top.
+  const knockback = BASE_KNOCKBACK * 2.5 + (atkFx.knockback ?? 0);
+  const away = Math.sign(defenderX - attackerX) || (side === "player" ? 1 : -1);
+  const pushedX = defenderX + away * knockback;
+  const nextPlayerX = defenderSide === "player" ? resolveMoveX(pushedX, s.opponentX) : s.playerX;
+  const nextOpponentX = defenderSide === "opponent" ? resolveMoveX(pushedX, s.playerX) : s.opponentX;
+
+  audio.playSfx("hit_heavy");
+  if (attacker.meter < 100 && newAttackerMeter >= 100) audio.playSfx("meter_full");
+
+  const defenderPatch: Partial<FighterRuntime> = {
+    health: newHealth,
+    action: "hitstun",
+    actionTimer: move.hitstun,
+    actionTotal: move.hitstun,
+    hitToken: defender.hitToken + 1,
+    combo: 0,
+  };
+
+  lastHit.kind = "normal";
+  lastHit.moveName = "Throw";
+
+  if (side === "player") {
+    set({
+      opponent: { ...defender, ...defenderPatch },
+      player: { ...attacker, meter: newAttackerMeter, combo: attacker.combo + 1 },
+      playerX: nextPlayerX,
+      opponentX: nextOpponentX,
+      screenShake: 0.5,
+      hitStop: 110,
+    });
+  } else {
+    set({
+      player: { ...defender, ...defenderPatch },
+      opponent: { ...attacker, meter: newAttackerMeter, combo: attacker.combo + 1 },
+      playerX: nextPlayerX,
+      opponentX: nextOpponentX,
+      screenShake: 0.5,
+      hitStop: 110,
+    });
+  }
+  pushHitEvent(set, get, "kick", side, dmg); // no dedicated HitEvent kind for throws — "kick"'s heavy-impact styling fits close enough
+}
+
 // Rolling per-side buffers of recently-CONNECTED (not whiffed) attacks, used
 // only to detect the named combo strings in COMBOS — see matchCombo below.
 // Module-level rather than store state on purpose: nothing outside combat
@@ -756,19 +977,45 @@ function attemptAttack2(set: SetFn, get: GetFn, kind: AttackKind) {
 let comboBufferPlayer: { kind: AttackKind; t: number }[] = [];
 let comboBufferOpponent: { kind: AttackKind; t: number }[] = [];
 let nextComboToken = 1;
+const MAX_COMBO_LEN = Math.max(...COMBOS.map((c) => c.sequence.length));
 
-/** Does this side's last 3 connected hits match a known combo string, all
- * thrown within COMBO_WINDOW_MS of each other? Consumes (clears) the buffer
- * on a match so the same string has to be rebuilt to trigger again, rather
- * than re-triggering on every subsequent hit via the sliding window. */
+// performance.now() timestamp of the most recent real keydown that started
+// blocking, per side — see PARRY.windowMs in resolveAttack. Module-level
+// (not store state) since it's pure input timing nothing else needs to
+// read or sync over the network.
+const blockPressedAt = { player: 0, opponent: 0 };
+
+// Whatever most recently landed a real hit, for tick()'s finisher trigger
+// to read the instant it detects the match-deciding blow — set at the end
+// of resolveAttack/resolveThrow ("normal") and inside fireSpecial's
+// setTimeout callback ("special") right before applySpecialHit runs.
+// Deliberately NOT cleared after every hit — only the finisher trigger
+// itself ever reads it, and only in the one tick a match actually ends, so
+// stale leftovers from earlier in the same match are harmless (they just
+// get overwritten by the next real hit long before anyone reads them).
+const lastHit: { kind: "special" | "normal" | null; moveName: string | null } = { kind: null, moveName: null };
+
+/** Does this side's connected-hit buffer end with a known combo string
+ * (checked longest-first, so a 4-hit string isn't pre-empted by a 3-hit
+ * one sharing its tail), all thrown within COMBO_WINDOW_MS of each other?
+ * Consumes (clears) the buffer on a match so the same string has to be
+ * rebuilt to trigger again, rather than re-triggering on every subsequent
+ * hit via the sliding window. */
 function matchCombo(buf: { kind: AttackKind; t: number }[]): ComboDef | null {
-  if (buf.length < 3) return null;
-  const last3 = buf.slice(-3);
-  for (let i = 1; i < 3; i++) {
-    if (last3[i].t - last3[i - 1].t > COMBO_WINDOW_MS) return null;
+  for (const combo of [...COMBOS].sort((a, b) => b.sequence.length - a.sequence.length)) {
+    const n = combo.sequence.length;
+    if (buf.length < n) continue;
+    const tail = buf.slice(-n);
+    let inWindow = true;
+    for (let i = 1; i < n; i++) {
+      if (tail[i].t - tail[i - 1].t > COMBO_WINDOW_MS) {
+        inWindow = false;
+        break;
+      }
+    }
+    if (inWindow && combo.sequence.every((k, i) => k === tail[i].kind)) return combo;
   }
-  const seq = last3.map((e) => e.kind);
-  return COMBOS.find((c) => c.sequence.every((k, i) => k === seq[i])) ?? null;
+  return null;
 }
 
 /** The AI-damage difficulty scale (see lib/difficulty.ts) only ever applies
@@ -783,8 +1030,11 @@ function aiDamageScaleFor(s: GameState, side: "player" | "opponent"): number | n
 
 function resolveAttack(set: SetFn, get: GetFn, side: "player" | "opponent", kind: AttackKind, stance: Stance, move: AttackProfile) {
   const s = get();
+  const attackerId = side === "player" ? s.playerId : s.opponentId;
+  const defenderId = side === "player" ? s.opponentId : s.playerId;
   const attacker = side === "player" ? s.player : s.opponent;
   const defender = side === "player" ? s.opponent : s.player;
+  const defenderSide = side === "player" ? "opponent" : "player";
   const defenderMove = defender.action;
 
   const attackerX = side === "player" ? s.playerX : s.opponentX;
@@ -792,8 +1042,62 @@ function resolveAttack(set: SetFn, get: GetFn, side: "player" | "opponent", kind
   if (Math.abs(defenderX - attackerX) > move.reach) return;
 
   const blocking = defenderMove === "block";
+
+  // --- Parry: the defender pressed block within PARRY.windowMs of THIS
+  // hit actually landing — zero damage, the attacker's own recovery gets
+  // extended as a hard punish, and the defender banks bonus meter. Checked
+  // before the attack touches the combo buffer at all — a parried swing
+  // never builds toward (or breaks) either side's combo string. ---
+  if (blocking) {
+    const pressedAt = defenderSide === "player" ? blockPressedAt.player : blockPressedAt.opponent;
+    if (performance.now() - pressedAt <= PARRY.windowMs) {
+      const punishedAttacker: FighterRuntime = {
+        ...attacker,
+        actionTimer: attacker.actionTimer + PARRY.attackerPunishMs,
+        actionTotal: attacker.actionTotal + PARRY.attackerPunishMs,
+      };
+      const rewardedDefender: FighterRuntime = { ...defender, meter: meterAfterHit(defender.meter, PARRY.meterBonus) };
+      set({
+        [side]: punishedAttacker,
+        [defenderSide]: rewardedDefender,
+        screenShake: 0.5,
+        hitStop: 140,
+        comboCallout: { label: "PARRY!", side: defenderSide, token: nextComboToken++ },
+      } as Partial<GameState>);
+      audio.playSfx("block");
+      pushHitEvent(set, get, "block", side);
+      return;
+    }
+  }
+
   let dmg = resolveDamage(move.damage, blocking, aiDamageScaleFor(s, side));
   let meterGain = move.meterGain;
+
+  // Damage scaling: hits already mid-combo (attacker.combo counts
+  // consecutive landed hits since the attacker last got tagged) hit
+  // progressively softer, so a long string of plain pokes isn't a free
+  // infinite — see COMBO_SCALING. The combo-finisher multiplier below
+  // still applies on TOP of this, so landing the actual named string
+  // stays strictly better than mashing.
+  dmg = Math.round(dmg * Math.max(COMBO_SCALING.floor, 1 - attacker.combo * COMBO_SCALING.perHit));
+
+  // Comeback: attacking FROM low health hits harder and builds meter
+  // faster (see COMEBACK in lib/combat.ts) — the lore's own "stop
+  // performing and just are the thing you always claimed to be," as an
+  // actual mechanic.
+  const attackerComeback = attacker.health / attacker.maxHealth < COMEBACK.healthThreshold;
+  if (attackerComeback) {
+    dmg = Math.round(dmg * COMEBACK.damageMult);
+    meterGain = Math.round(meterGain * COMEBACK.meterMult);
+  }
+
+  // Elemental effects — attacker's element flavors the hit itself
+  // (meter/hit-stop), defender's element can blunt it back (steel's chip
+  // reduction only matters while blocking). See ELEMENT_EFFECTS.
+  const atkFx = elementEffectFor(attackerId);
+  const defFx = elementEffectFor(defenderId);
+  if (atkFx.meterMult) meterGain = Math.round(meterGain * atkFx.meterMult);
+  if (blocking && defFx.chipReduction) dmg = Math.round(dmg * defFx.chipReduction);
 
   // A whiffed swing (handled above via the early return) never reaches the
   // buffer at all, so only real connects build toward a combo — mashing at
@@ -801,7 +1105,7 @@ function resolveAttack(set: SetFn, get: GetFn, side: "player" | "opponent", kind
   // also just falls out of matchCombo's window check on its own next call.
   const buf = side === "player" ? comboBufferPlayer : comboBufferOpponent;
   buf.push({ kind, t: performance.now() });
-  if (buf.length > 3) buf.shift();
+  if (buf.length > MAX_COMBO_LEN) buf.shift();
   const combo = matchCombo(buf);
   if (combo) {
     dmg = Math.round(dmg * combo.damageMult);
@@ -812,25 +1116,61 @@ function resolveAttack(set: SetFn, get: GetFn, side: "player" | "opponent", kind
 
   const newHealth = clamp(defender.health - dmg, 0, defender.maxHealth);
   const newAttackerMeter = meterAfterHit(attacker.meter, meterGain);
-  const hitstun = move.hitstun;
+  let hitstun = move.hitstun;
+  if (!blocking) {
+    hitstun += atkFx.hitstunBonus ?? 0;
+    if (atkFx.stunChance && Math.random() < atkFx.stunChance) hitstun += atkFx.stunChanceBonus ?? 0;
+  }
   // A jump kick lands with real impact — a bigger hit-stop/screen-shake
   // flourish than a grounded attack, on top of already dealing the most
   // damage/hitstun of any normal. A combo finisher gets the same
   // bump-up treatment regardless of kind, since it's meant to read as the
-  // biggest moment in the exchange.
-  const impact = (kind === "kick" ? (stance === "air" ? 1.4 : 1) : 0.5) * (combo ? 1.5 : 1);
+  // biggest moment in the exchange. Earth hits ALSO get a flourish bump
+  // (ELEMENT_EFFECTS.earth.hitStopMult) — the ground remembers, etc.
+  const impact = (kind === "kick" ? (stance === "air" ? 1.4 : 1) : 0.5) * (combo ? 1.5 : 1) * (blocking ? 1 : (atkFx.hitStopMult ?? 1));
 
   audio.playSfx(blocking ? "block" : combo ? "special_release" : kind === "kick" ? "hit_heavy" : "hit_light");
   if (attacker.meter < 100 && newAttackerMeter >= 100) audio.playSfx("meter_full");
 
+  // Knockback — a small universal push on every non-blocked hit, bigger
+  // for wind/kinetic/void (see ELEMENT_EFFECTS) — shoves the DEFENDER
+  // further from the attacker, clamped to the stage/minimum-separation
+  // rules same as any other movement.
+  let nextPlayerX = s.playerX;
+  let nextOpponentX = s.opponentX;
+  if (!blocking) {
+    const knockback = BASE_KNOCKBACK + (atkFx.knockback ?? 0);
+    const away = Math.sign(defenderX - attackerX) || (side === "player" ? 1 : -1);
+    const pushedX = defenderX + away * knockback;
+    if (defenderSide === "player") nextPlayerX = resolveMoveX(pushedX, s.opponentX);
+    else nextOpponentX = resolveMoveX(pushedX, s.playerX);
+  }
+
+  const burnFx = !blocking ? atkFx : undefined;
   const defenderPatch: Partial<FighterRuntime> = blocking
     ? { health: newHealth }
-    : { health: newHealth, action: "hitstun", actionTimer: hitstun, actionTotal: hitstun, hitToken: defender.hitToken + 1, combo: 0 };
+    : {
+        health: newHealth,
+        action: "hitstun",
+        actionTimer: hitstun,
+        actionTotal: hitstun,
+        hitToken: defender.hitToken + 1,
+        combo: 0,
+        ...(burnFx?.burnTicks
+          ? { burnTicksLeft: burnFx.burnTicks, burnTickTimer: BURN_TICK_INTERVAL_MS, burnDamage: burnFx.burnDamage ?? 0 }
+          : {}),
+        ...(burnFx?.slowMs ? { slowMsLeft: burnFx.slowMs, slowFactor: burnFx.slowFactor ?? 1 } : {}),
+      };
+
+  lastHit.kind = "normal";
+  lastHit.moveName = combo ? combo.label.replace(/!$/, "") : kind === "kick" ? "Kick" : "Punch";
 
   if (side === "player") {
     set({
       opponent: { ...defender, ...defenderPatch },
       player: { ...attacker, meter: newAttackerMeter, combo: attacker.combo + 1 },
+      playerX: nextPlayerX,
+      opponentX: nextOpponentX,
       screenShake: 0.4 * impact,
       hitStop: blocking ? 0 : Math.round(90 * impact),
     });
@@ -838,16 +1178,18 @@ function resolveAttack(set: SetFn, get: GetFn, side: "player" | "opponent", kind
     set({
       player: { ...defender, ...defenderPatch },
       opponent: { ...attacker, meter: newAttackerMeter, combo: attacker.combo + 1 },
+      playerX: nextPlayerX,
+      opponentX: nextOpponentX,
       screenShake: 0.4 * impact,
       hitStop: blocking ? 0 : Math.round(90 * impact),
     });
   }
-  pushHitEvent(set, get, blocking ? "block" : kind, side);
+  pushHitEvent(set, get, blocking ? "block" : kind, side, dmg);
 }
 
-function pushHitEvent(set: SetFn, get: GetFn, kind: HitEvent["kind"], side: HitEvent["side"]) {
+function pushHitEvent(set: SetFn, get: GetFn, kind: HitEvent["kind"], side: HitEvent["side"], damage = 0) {
   const s = get();
-  const events = [...s.hitEvents, { id: nextHitId(), kind, side, t: performance.now() }].slice(-12);
+  const events = [...s.hitEvents, { id: nextHitId(), kind, side, t: performance.now(), damage }].slice(-12);
   set({ hitEvents: events });
 }
 
@@ -889,7 +1231,7 @@ function fireSpecial(set: SetFn, get: GetFn, side: "player" | "opponent") {
       const attackerX = side === "player" ? cur.playerX : cur.opponentX;
       const defenderX = side === "player" ? cur.opponentX : cur.playerX;
       if (Math.abs(defenderX - attackerX) <= RANGE.specialReach) {
-        applySpecialHit(set, get, side, move.damage);
+        applySpecialHit(set, get, side, move.damage, move.name);
       }
     }
 
@@ -901,15 +1243,19 @@ function fireSpecial(set: SetFn, get: GetFn, side: "player" | "opponent") {
   }, TIMING.specialWindup);
 }
 
-function applySpecialHit(set: SetFn, get: GetFn, side: "player" | "opponent", damage: number) {
+function applySpecialHit(set: SetFn, get: GetFn, side: "player" | "opponent", damage: number, moveName: string) {
   const s = get();
+  const attacker = side === "player" ? s.player : s.opponent;
   const defender = side === "player" ? s.opponent : s.player;
   const blocking = defender.action === "block";
-  const dmg = resolveDamage(damage, blocking, aiDamageScaleFor(s, side));
+  let dmg = resolveDamage(damage, blocking, aiDamageScaleFor(s, side));
+  if (attacker.health / attacker.maxHealth < COMEBACK.healthThreshold) dmg = Math.round(dmg * COMEBACK.damageMult);
   const newHealth = clamp(defender.health - dmg, 0, defender.maxHealth);
   const patch: Partial<FighterRuntime> = blocking
     ? { health: newHealth }
     : { health: newHealth, action: "hitstun", actionTimer: TIMING.specialHitstun, actionTotal: TIMING.specialHitstun, hitToken: defender.hitToken + 1, combo: 0 };
+  lastHit.kind = "special";
+  lastHit.moveName = moveName;
   set({
     [side === "player" ? "opponent" : "player"]: { ...defender, ...patch },
     screenShake: 1,
@@ -925,6 +1271,7 @@ function stepProjectiles(set: SetFn, get: GetFn, dtMs: number) {
   const remaining: Projectile[] = [];
   let hitSide: "player" | "opponent" | null = null;
   let hitDamage = 0;
+  let hitCharacterId = "";
 
   for (const p of s.projectiles) {
     const x = p.x + p.dir * PROJECTILE.speed * dt;
@@ -932,13 +1279,14 @@ function stepProjectiles(set: SetFn, get: GetFn, dtMs: number) {
     if (Math.abs(x - targetX) <= PROJECTILE.hitRadius) {
       hitSide = p.side;
       hitDamage = p.damage;
+      hitCharacterId = p.characterId;
       continue; // consumed on hit
     }
     if (x < -bound - 1 || x > bound + 1) continue; // flew off stage — miss
     remaining.push({ ...p, x });
   }
 
-  if (hitSide) applySpecialHit(set, get, hitSide, hitDamage);
+  if (hitSide) applySpecialHit(set, get, hitSide, hitDamage, getSpecial(hitCharacterId).name);
   set({ projectiles: remaining });
 }
 
@@ -1000,6 +1348,10 @@ function resetAI() {
   aiComboPlan = [];
   comboBufferPlayer = [];
   comboBufferOpponent = [];
+  blockPressedAt.player = 0;
+  blockPressedAt.opponent = 0;
+  lastHit.kind = null;
+  lastHit.moveName = null;
 }
 
 function throwAIAttack(set: SetFn, get: GetFn, cur: GameState, forcedKind?: AttackKind) {
@@ -1042,10 +1394,11 @@ function runAI(set: SetFn, get: GetFn, dtMs: number) {
   // the gap), otherwise a movement intent is re-rolled only periodically
   // and held fixed until the next roll — see aiMoveDir's declaration for
   // why this is the actual fix for the mirroring complaint. ---
+  const aiSlow = s.opponent.slowMsLeft > 0 ? s.opponent.slowFactor : 1;
   if (aggressive) {
     if (dNow > RANGE.reach && (s.opponent.action === "idle" || s.opponent.action === "walk")) {
       const toward = Math.sign(s.playerX - s.opponentX) || 1;
-      const speed = RANGE.moveSpeed * 1.2 * (dtMs / 1000);
+      const speed = moveSpeedFor(s.opponentId) * 1.2 * aiSlow * (dtMs / 1000);
       const nextX = resolveMoveX(s.opponentX + toward * speed, s.playerX);
       set({ opponentX: nextX, opponent: { ...get().opponent, action: "walk" } });
     }
@@ -1071,7 +1424,7 @@ function runAI(set: SetFn, get: GetFn, dtMs: number) {
       }
     }
     if (aiMoveDir !== 0 && (s.opponent.action === "idle" || s.opponent.action === "walk")) {
-      const speed = RANGE.moveSpeed * (dtMs / 1000);
+      const speed = moveSpeedFor(s.opponentId) * aiSlow * (dtMs / 1000);
       const nextX = resolveMoveX(s.opponentX + aiMoveDir * speed, s.playerX);
       set({ opponentX: nextX, opponent: { ...get().opponent, action: "walk" } });
     }
@@ -1142,6 +1495,15 @@ function runAI(set: SetFn, get: GetFn, dtMs: number) {
 
   if (!inMelee && !aggressive && roll < 0.12 && cur.opponentY <= 0.02) {
     set({ opponentVelY: JUMP.velocity });
+    return;
+  }
+
+  // A turtling player (holding block right now, in melee range) is exactly
+  // what a throw is FOR — beats block outright. Scaled off the same
+  // per-tier attackChance rather than a whole new difficulty knob: a more
+  // aggressive tier is also a smarter one about capitalizing on this read.
+  if (inMelee && cur.player.action === "block" && Math.random() < diff.attackChance * 0.5) {
+    attemptThrow(set, get, "opponent");
     return;
   }
 

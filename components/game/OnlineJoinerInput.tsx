@@ -8,7 +8,7 @@ const KEY_LEFT = new Set(["KeyA", "ArrowLeft"]);
 const KEY_RIGHT = new Set(["KeyD", "ArrowRight"]);
 const KEY_CROUCH = new Set(["KeyS", "ArrowDown"]);
 const KEY_JUMP = new Set(["KeyW", "ArrowUp", "Space"]);
-const HANDLED = new Set(["KeyA", "KeyD", "KeyS", "KeyW", "ArrowLeft", "ArrowRight", "ArrowDown", "ArrowUp", "Space", "KeyJ", "KeyK", "KeyL", "KeyU"]);
+const HANDLED = new Set(["KeyA", "KeyD", "KeyS", "KeyW", "ArrowLeft", "ArrowRight", "ArrowDown", "ArrowUp", "Space", "KeyJ", "KeyK", "KeyL", "KeyU", "KeyI"]);
 
 /** The joiner's own input, for an online match — same key layout as
  * single-player (PlayerInput2D), but every action sends a message over
@@ -43,6 +43,9 @@ export default function OnlineJoinerInput() {
           break;
         case "KeyU":
           sendInput({ t: "special" });
+          break;
+        case "KeyI":
+          sendInput({ t: "throw" });
           break;
       }
       if (KEY_JUMP.has(e.code)) sendInput({ t: "jump" });

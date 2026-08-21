@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { useGameStore } from "@/lib/store";
-import { getCharacter, STAGE } from "@/lib/combat";
+import { getCharacter, STAGE, COMEBACK } from "@/lib/combat";
 import { ARENAS } from "@/lib/arenas";
 import { drawFighter, drawBoss, drawBossAura, type FighterColors } from "@/lib/sprite2d";
 import { selectSprite } from "@/lib/spriteAtlas";
@@ -28,6 +28,39 @@ const VIEW_WIDTH = 13;
 const PX_PER_UNIT = W / VIEW_WIDTH;
 const CAMERA_BOUND = Math.max(0, STAGE.width / 2 - VIEW_WIDTH / 2);
 
+// --- Juice pass: hit sparks + floating damage numbers, both driven purely
+// off s.hitEvents (see HitEvent in lib/store.ts), and a camera punch-in on
+// specials. None of this is React state — it's plain mutable arrays living
+// on a ref alongside cameraX, advanced imperatively once per rAF tick same
+// as everything else in this draw loop, so a burst of 8 sparks doesn't
+// mean 8 re-renders.
+interface Spark {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+  maxLife: number;
+  color: string;
+  size: number;
+}
+interface DamageNumber {
+  x: number;
+  y: number;
+  vy: number;
+  life: number;
+  maxLife: number;
+  text: string;
+  color: string;
+  big: boolean;
+}
+interface Vfx {
+  sparks: Spark[];
+  numbers: DamageNumber[];
+  lastHitId: number;
+  zoom: number;
+}
+
 /** The live fight's single shared canvas: background + both fighters +
  * projectiles, all drawn in one pass so draw order between them is always
  * correct (two independently-looping canvases racing each other would make
@@ -40,6 +73,7 @@ export default function Stage2D() {
   // whip-pan the background; persists across frames via a ref since this
   // isn't React state.
   const cameraX = useRef(0);
+  const vfx = useRef<Vfx>({ sparks: [], numbers: [], lastHitId: 0, zoom: 1 });
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -54,7 +88,7 @@ export default function Stage2D() {
     const loop = (t: number) => {
       const dt = Math.min(0.05, (t - last) / 1000);
       last = t;
-      draw(ctx, t, dt, cameraX);
+      draw(ctx, t, dt, cameraX, vfx.current);
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
@@ -75,7 +109,22 @@ function worldToCanvasX(x: number, cam: number) {
   return W / 2 + (x - cam) * PX_PER_UNIT;
 }
 
-function draw(ctx: CanvasRenderingContext2D, t: number, dt: number, cameraXRef: { current: number }) {
+// Canvas text can't reference a CSS custom property directly (ctx.font
+// wants a real font-family value) — next/font's generated family name(s)
+// live in the --font-display variable set on <html> (see app/layout.tsx),
+// so this reads it once out of computed style and caches the resolved
+// string for the rest of the session.
+let cachedDisplayFont: string | null = null;
+function displayFontFamily(): string {
+  if (cachedDisplayFont) return cachedDisplayFont;
+  if (typeof document !== "undefined") {
+    const v = getComputedStyle(document.documentElement).getPropertyValue("--font-display").trim();
+    if (v) cachedDisplayFont = v;
+  }
+  return cachedDisplayFont ?? "sans-serif";
+}
+
+function draw(ctx: CanvasRenderingContext2D, t: number, dt: number, cameraXRef: { current: number }, vfx: Vfx) {
   const s = useGameStore.getState();
   const arena = ARENAS[s.arenaId] ?? ARENAS.fire;
   const pChar = getCharacter(s.playerId);
@@ -85,6 +134,16 @@ function draw(ctx: CanvasRenderingContext2D, t: number, dt: number, cameraXRef: 
   cameraXRef.current += (targetCam - cameraXRef.current) * Math.min(1, dt * 6);
   const cam = cameraXRef.current;
 
+  // Camera punch-in: either fighter mid-special zooms the whole scene in a
+  // little, same instinct as a fighting game's hit-camera — smoothed on its
+  // own timescale (slower than the shake, faster than the pan) so it reads
+  // as a deliberate push rather than a jump-cut.
+  const wantZoom = s.player.action === "special" || s.opponent.action === "special" ? 1.14 : 1;
+  vfx.zoom += (wantZoom - vfx.zoom) * Math.min(1, dt * 5);
+
+  spawnHitVfx(s, vfx, cam, pChar.colors, oChar.colors);
+  stepVfx(vfx, dt);
+
   ctx.clearRect(0, 0, W, H);
   ctx.save();
 
@@ -92,6 +151,12 @@ function draw(ctx: CanvasRenderingContext2D, t: number, dt: number, cameraXRef: 
     const k = s.screenShake * 6;
     ctx.translate((Math.random() - 0.5) * k, (Math.random() - 0.5) * k);
   }
+
+  const zoomAnchorX = W / 2;
+  const zoomAnchorY = GROUND_Y - FIGHTER_H * 0.4;
+  ctx.translate(zoomAnchorX, zoomAnchorY);
+  ctx.scale(vfx.zoom, vfx.zoom);
+  ctx.translate(-zoomAnchorX, -zoomAnchorY);
 
   drawBackground(ctx, arena, t, cam);
 
@@ -130,7 +195,140 @@ function draw(ctx: CanvasRenderingContext2D, t: number, dt: number, cameraXRef: 
     drawProjectile(ctx, worldToCanvasX(p.x, cam), GROUND_Y - FIGHTER_H * 0.42, owner.colors, t);
   }
 
+  drawVfx(ctx, vfx);
+
   ctx.restore();
+
+  drawComebackVignette(ctx, s, pChar.colors, oChar.colors, t);
+}
+
+// New hit events (see HitEvent in lib/store.ts) each spawn a burst of
+// sparks plus, when real damage was dealt, a floating number — both
+// anchored on the DEFENDER's position, since `event.side` records who
+// THREW the hit, not who took it. Runs once per event no matter how many
+// frames it takes stepVfx to fully decay it, tracked via vfx.lastHitId.
+// Positions are projected to canvas-pixel space once, right here, using
+// the camera's position at the moment of the hit — sparks/numbers only
+// live 260–900ms and the camera pans slowly, so not re-projecting them
+// against the camera every subsequent frame is an imperceptible shortcut
+// that keeps stepVfx/drawVfx simple flat-2D particle sims.
+function spawnHitVfx(s: ReturnType<typeof useGameStore.getState>, vfx: Vfx, cam: number, pColors: FighterColors, oColors: FighterColors) {
+  const fresh = s.hitEvents.filter((e) => e.id > vfx.lastHitId);
+  if (fresh.length === 0) return;
+  vfx.lastHitId = s.hitEvents.length ? s.hitEvents[s.hitEvents.length - 1].id : vfx.lastHitId;
+
+  for (const e of fresh) {
+    const defenderIsPlayer = e.side === "opponent";
+    const dWorldX = defenderIsPlayer ? s.playerX : s.opponentX;
+    const dy = defenderIsPlayer ? s.playerY : s.opponentY;
+    const attackerColors = e.side === "player" ? pColors : oColors;
+    const isParry = e.kind === "block" && e.damage === 0;
+    const originX = worldToCanvasX(dWorldX, cam);
+    const originY = GROUND_Y - FIGHTER_H * (0.55 + dy * 0.55);
+
+    if (isParry) {
+      // A crisp white ring instead of the usual scatter — the parry
+      // callout text already carries the "you did something special"
+      // read, this just needs to punctuate it at the point of contact.
+      for (let i = 0; i < 10; i++) {
+        const a = (i / 10) * Math.PI * 2;
+        spawnSpark(vfx, originX, originY, Math.cos(a) * 90, Math.sin(a) * 90, "#ffffff", 2.4, 380);
+      }
+      continue;
+    }
+
+    const isChip = e.kind === "block";
+    const count = isChip ? 4 : e.kind === "special" ? 10 : e.kind === "kick" ? 8 : 6;
+    const color = isChip ? "#9fd0ff" : e.kind === "special" ? attackerColors.emissive : "#fff2c4";
+    const spread = isChip ? 60 : e.kind === "special" ? 150 : 115; // px/sec
+    const dir = defenderIsPlayer ? -1 : 1; // sparks kick off away from the attacker
+    for (let i = 0; i < count; i++) {
+      const a = (Math.random() - 0.5) * 1.6;
+      const speed = spread * (0.5 + Math.random() * 0.8);
+      spawnSpark(vfx, originX, originY, Math.cos(a) * speed * dir, Math.sin(a) * speed - spread * 0.3, color, isChip ? 1.6 : 2.4 + Math.random() * 1.4, isChip ? 260 : 420);
+    }
+
+    if (e.damage > 0 && !isChip) {
+      vfx.numbers.push({
+        x: originX + (Math.random() - 0.5) * 14,
+        y: originY,
+        vy: -70,
+        life: 900,
+        maxLife: 900,
+        text: `${e.damage}`,
+        color,
+        big: e.kind === "special" || e.damage >= 24,
+      });
+    }
+  }
+}
+
+function spawnSpark(vfx: Vfx, x: number, y: number, vx: number, vy: number, color: string, size: number, maxLife: number) {
+  vfx.sparks.push({ x, y, vx, vy, life: maxLife, maxLife, color, size });
+}
+
+function stepVfx(vfx: Vfx, dt: number) {
+  const dtMs = dt * 1000;
+  for (const sp of vfx.sparks) {
+    sp.x += sp.vx * dt;
+    sp.y += sp.vy * dt;
+    sp.vy += dt * 380; // gravity, px/sec²
+    sp.life -= dtMs;
+  }
+  vfx.sparks = vfx.sparks.filter((sp) => sp.life > 0);
+  for (const n of vfx.numbers) {
+    n.y += n.vy * dt;
+    n.vy += dt * 150; // eases the upward pop back down, same feel as the health bar's own easing
+    n.life -= dtMs;
+  }
+  vfx.numbers = vfx.numbers.filter((n) => n.life > 0);
+}
+
+function drawVfx(ctx: CanvasRenderingContext2D, vfx: Vfx) {
+  for (const sp of vfx.sparks) {
+    const k = sp.life / sp.maxLife;
+    ctx.globalAlpha = Math.max(0, k);
+    ctx.fillStyle = sp.color;
+    ctx.beginPath();
+    ctx.arc(sp.x, sp.y, sp.size * (0.4 + k * 0.6), 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  for (const n of vfx.numbers) {
+    const k = n.life / n.maxLife;
+    const fontSize = n.big ? 15 : 11;
+    ctx.globalAlpha = Math.min(1, k * 1.6);
+    ctx.font = `900 ${fontSize}px ${displayFontFamily()}`;
+    ctx.textAlign = "center";
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(0,0,0,0.75)";
+    ctx.strokeText(n.text, n.x, n.y);
+    ctx.fillStyle = n.color;
+    ctx.fillText(n.text, n.x, n.y);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawComebackVignette(ctx: CanvasRenderingContext2D, s: ReturnType<typeof useGameStore.getState>, pColors: FighterColors, oColors: FighterColors, t: number) {
+  const pComeback = s.player.health > 0 && s.player.health / s.player.maxHealth < COMEBACK.healthThreshold;
+  const oComeback = s.opponent.health > 0 && s.opponent.health / s.opponent.maxHealth < COMEBACK.healthThreshold;
+  if (!pComeback && !oComeback) return;
+  const pulse = 0.55 + Math.sin(t / 220) * 0.15;
+  if (pComeback) {
+    const g = ctx.createLinearGradient(0, 0, W * 0.4, 0);
+    g.addColorStop(0, hexAlpha(pColors.emissive, 0.32 * pulse));
+    g.addColorStop(1, hexAlpha(pColors.emissive, 0));
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W * 0.4, H);
+  }
+  if (oComeback) {
+    const g = ctx.createLinearGradient(W, 0, W * 0.6, 0);
+    g.addColorStop(0, hexAlpha(oColors.emissive, 0.32 * pulse));
+    g.addColorStop(1, hexAlpha(oColors.emissive, 0));
+    ctx.fillStyle = g;
+    ctx.fillRect(W * 0.6, 0, W * 0.4, H);
+  }
 }
 
 function drawBackground(ctx: CanvasRenderingContext2D, arena: (typeof ARENAS)[string], t: number, cam: number) {

@@ -11,6 +11,7 @@ import TutorialOverlay from "@/components/ui/TutorialOverlay";
 import MatchupIntro from "./MatchupIntro";
 import StoryCutscene from "./StoryCutscene";
 import BossReveal from "./BossReveal";
+import FinisherSequence from "./FinisherSequence";
 import { useGameStore } from "@/lib/store";
 import { getCharacter } from "@/lib/combat";
 import { STORY_DIALOGUE } from "@/lib/storyDialogue";
@@ -31,6 +32,8 @@ export default function FightScreen() {
   const playerId = useGameStore((s) => s.playerId);
   const opponentId = useGameStore((s) => s.opponentId);
   const arenaId = useGameStore((s) => s.arenaId);
+  const finisher = useGameStore((s) => s.finisher);
+  const resolveFinisher = useGameStore((s) => s.resolveFinisher);
   const isJoiner = onlineRole === "joiner";
 
   // Story mode gets a real pre-fight scene instead of the lightweight
@@ -198,6 +201,25 @@ export default function FightScreen() {
             </button>
           </div>
         </div>
+      )}
+
+      {/* The match-deciding blow — see FinisherInfo in lib/store.ts. tick()
+          holds phase at "fight" while this is set instead of cutting
+          straight to the result screen, so this renders full-screen on
+          top of the (now-frozen) live fight underneath. Only the
+          non-joiner side's onDone ever calls resolveFinisher() — the
+          joiner just watches; the host's own eventual phase:"result"
+          broadcast is what actually ends it for both sides in sync. */}
+      {finisher && (
+        <FinisherSequence
+          winnerId={finisher.winnerSide === "player" ? playerId : opponentId}
+          loserId={finisher.winnerSide === "player" ? opponentId : playerId}
+          moveName={finisher.moveName}
+          kind={finisher.kind}
+          onDone={() => {
+            if (!isJoiner) resolveFinisher();
+          }}
+        />
       )}
     </div>
   );

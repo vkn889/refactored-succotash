@@ -12,6 +12,7 @@ const CONTROLS: { keys: string; action: string }[] = [
   { keys: "S + K", action: "Sweep — a low kick with long reach and a hard knockdown" },
   { keys: "W + K", action: "Jump kick — biggest damage in the game, but committal" },
   { keys: "L (hold)", action: "Block — chips damage down a lot" },
+  { keys: "I", action: "Throw — grabs through block, can't be blocked" },
   { keys: "U", action: "Special, once your meter is full" },
   { keys: "Esc", action: "Pause" },
 ];
@@ -35,7 +36,11 @@ export default function TutorialOverlay() {
           <span className="text-white/80">Kick → Kick → Punch</span>, or{" "}
           <span className="text-white/80">Punch → Kick → Punch</span> in quick succession to land a bonus combo
           finisher — extra damage and meter on the last hit. Your opponent can throw these back at you too, so
-          don&apos;t just trade hits blindly — the AI will punish an attack the instant your recovery ends.
+          don&apos;t just trade hits blindly — the AI will punish an attack the instant your recovery ends. Blocking
+          beats normal attacks but not throws — grab a turtling opponent instead. Block right as a hit lands to
+          parry it instead, no damage taken and a hard punish window on the attacker. Drop below a quarter health
+          and you enter &ldquo;Real Mog&rdquo; — your attacks hit harder and build meter faster. Land the
+          match-winning blow and watch it play out as a finisher.
         </p>
 
         <div className="mt-4 grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2">

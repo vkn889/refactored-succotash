@@ -1,5 +1,5 @@
 import { CHARACTERS } from "./characters";
-import type { Build, CharacterConfig, MoveConfig } from "./types";
+import type { Build, CharacterConfig, ElementId, MoveConfig } from "./types";
 
 // Centralized combat resolver for the 2D retro fighter. Every character
 // routes through these pure functions so balancing the roster is a data
@@ -75,6 +75,26 @@ export const ATTACKS: Record<AttackKind, Record<Stance, { damage: number; meterG
   },
 };
 
+/** A grab that ignores block entirely — the classic fighting-game "attack
+ * loses to block, block loses to throw, throw loses to attack" triangle.
+ * Shorter true range than a normal punch/kick (has to actually grab, not
+ * just reach), meaningfully slower recovery than either (whiffing one at
+ * a turtling opponent who steps out of range is a real punish window for
+ * them), and never builds toward a COMBOS string — a throw is its own
+ * beat, not part of a punch/kick rhythm. */
+export const THROW = { damage: 22, meterGain: 6, reach: 1.15, hitstun: 420, windup: 90, active: 50, recovery: 260 };
+
+export function getThrowMove(characterId: string): AttackProfile {
+  const power = BUILD_POWER[getCharacter(characterId).build];
+  return {
+    damage: Math.round(THROW.damage * power.damage),
+    meterGain: THROW.meterGain,
+    reach: THROW.reach,
+    hitstun: THROW.hitstun,
+    totalMs: Math.round((THROW.windup + THROW.active + THROW.recovery) / power.speed),
+  };
+}
+
 /** Bulkier builds hit harder and slower; slimmer builds hit lighter and
  * faster. Reuses each character's existing `build` field (also shown as
  * "Fighting Style" in CharacterSelect) rather than a second stat to keep
@@ -91,6 +111,12 @@ export const TIMING = {
   cooldown: 550,
   specialHitstun: 340, // flat, independent of the punch/kick stance tables above
 };
+
+/** How long FinisherSequence.tsx holds the screen once the match-deciding
+ * blow lands, before handing off to the normal result screen (see
+ * `finisher`/`resolveFinisher` in lib/store.ts). A special-move finish gets
+ * a longer beat than a normal-hit finish since it has more to show off. */
+export const FINISHER_DURATION_MS = { special: 3200, normal: 2400 };
 
 /** Everything resolveAttack (lib/store.ts) needs for one thrown punch/kick,
  * already scaled by the attacker's build — computed once at the moment the
@@ -139,13 +165,97 @@ export interface ComboDef {
   meterMult: number;
 }
 
+// Sequences are tried longest-first (see matchCombo in lib/store.ts) so a
+// 4-hit string doesn't get pre-empted by a 3-hit one sharing its tail.
 export const COMBOS: ComboDef[] = [
+  { id: "raging_chain", label: "RAGING CHAIN!", sequence: ["punch", "punch", "punch", "kick"], damageMult: 1.75, meterMult: 1.9 },
+  { id: "cyclone", label: "CYCLONE COMBO!", sequence: ["kick", "punch", "kick", "punch"], damageMult: 1.8, meterMult: 1.9 },
   { id: "rush", label: "RUSH COMBO!", sequence: ["punch", "punch", "kick"], damageMult: 1.5, meterMult: 1.6 },
   { id: "overhead", label: "OVERHEAD SMASH!", sequence: ["kick", "kick", "punch"], damageMult: 1.6, meterMult: 1.6 },
   { id: "flurry", label: "FLURRY FINISH!", sequence: ["punch", "kick", "punch"], damageMult: 1.55, meterMult: 1.6 },
 ];
 
 export const COMBO_WINDOW_MS = 700; // max gap between consecutive connecting hits for them to still chain
+
+/** Per-hit damage scaling for hits landed while already mid-combo (classic
+ * fighting-game "damage scaling," the thing that stops a long juggle
+ * string from being a free infinite) — multiplies normal-attack damage by
+ * `max(floor, 1 - attacker.combo * perHit)`, where `attacker.combo` is the
+ * number of hits already landed in the current string (see FighterRuntime
+ * in lib/store.ts). The first hit of any string is always full damage
+ * (combo === 0 there); the floor keeps even a very long string doing SOME
+ * real damage instead of trailing off to nothing. Combo-finisher bonus
+ * multipliers (ComboDef.damageMult above) apply on top of this, not
+ * instead of it — landing the actual named string is still the strictly
+ * best outcome. */
+export const COMBO_SCALING = { perHit: 0.08, floor: 0.45 };
+
+/** Below this fraction of max health, a fighter is in "Real Mog" mode —
+ * the lore's own description of what maxing the meter does ("you stop
+ * performing and just are the thing you always claimed to be") applied as
+ * an actual comeback mechanic: their own damage output and meter gain both
+ * step up a little. Applies to whichever side is attacking FROM low
+ * health, not to whoever's fighting a low-health opponent. */
+export const COMEBACK = { healthThreshold: 0.25, damageMult: 1.15, meterMult: 1.3 };
+
+/** Press block within this many ms of an incoming hit actually landing and
+ * it's a parry instead of a plain block: zero damage (not even chip),
+ * the attacker's own recovery gets punished hard, and the defender banks
+ * bonus meter — see blockPressedAt tracking + the parry check in
+ * resolveAttack (lib/store.ts). Scoped to normal punch/kick only, not
+ * throws or specials — those are either already unblockable (throw) or
+ * telegraphed enough that a parry would be redundant with just blocking
+ * (special). */
+export const PARRY = { windowMs: 150, attackerPunishMs: 420, meterBonus: 30 };
+
+/** A small, universal push-back on every non-blocked normal hit (real
+ * fighting games call this "hitstun push" or "knockback") — base is a
+ * light thump, elemental bonuses on top per lib/types.ts's ElementId make
+ * a hit's PHYSICALITY, not just its number, feel distinct per character.
+ * `moveSpeedMult` (steel/tech/shift/speed/void below) is a passive trait,
+ * not an on-hit effect — read directly wherever movement speed is
+ * computed (lib/store.ts's move/move2/runAI). Any element not listed here
+ * (prism — Overmog only, already has its own boss-specific numbers) just
+ * gets the shared baseline knockback and nothing else. */
+export const BASE_KNOCKBACK = 0.16;
+
+export interface ElementalEffect {
+  knockback?: number; // extra push (world units) on top of BASE_KNOCKBACK
+  hitstunBonus?: number; // extra ms of hitstun, guaranteed
+  stunChance?: number; // 0..1 — roll for a bigger "shock" bonus
+  stunChanceBonus?: number; // extra ms of hitstun if the stunChance roll succeeds
+  burnTicks?: number; // fire: number of damage-over-time ticks after the hit
+  burnDamage?: number; // fire: unmitigated chip damage per tick
+  slowFactor?: number; // ice: defender's move speed multiplier while slowed
+  slowMs?: number; // ice: how long the slow lasts
+  meterMult?: number; // multiplies the ATTACKER's meter gain from this hit
+  hitStopMult?: number; // multiplies hit-stop/screen-shake for this hit
+  chipReduction?: number; // steel-only, checked off the DEFENDER's element: extra multiplier on chip damage taken while blocking
+  moveSpeedMult?: number; // passive — this character's own base move speed multiplier
+}
+
+export const ELEMENT_EFFECTS: Partial<Record<ElementId, ElementalEffect>> = {
+  fire: { burnTicks: 3, burnDamage: 4 },
+  ice: { knockback: 0.15, slowFactor: 0.6, slowMs: 900 },
+  electric: { stunChance: 0.25, stunChanceBonus: 150 },
+  lightning: { hitstunBonus: 60 },
+  wind: { knockback: 0.75 },
+  kinetic: { knockback: 0.5 },
+  earth: { hitStopMult: 1.3 },
+  steel: { chipReduction: 0.5 },
+  tech: { meterMult: 1.3 },
+  shift: { moveSpeedMult: 1.15 },
+  speed: { moveSpeedMult: 1.1 },
+  void: { hitstunBonus: 40, knockback: 0.3 },
+};
+
+export function elementEffectFor(characterId: string): ElementalEffect {
+  return ELEMENT_EFFECTS[getCharacter(characterId).element] ?? {};
+}
+
+export function moveSpeedFor(characterId: string): number {
+  return RANGE.moveSpeed * (elementEffectFor(characterId).moveSpeedMult ?? 1);
+}
 
 export function getCharacter(id: string): CharacterConfig {
   const c = CHARACTERS[id];

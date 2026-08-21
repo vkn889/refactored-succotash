@@ -1,7 +1,7 @@
 "use client";
 
 import { createClient, type RealtimeChannel, type SupabaseClient } from "@supabase/supabase-js";
-import { useGameStore, type ActionState, type MatchPhase } from "./store";
+import { useGameStore, type ActionState, type MatchPhase, type FinisherInfo } from "./store";
 import type { Stance } from "./combat";
 
 // Online multiplayer transport: Supabase Realtime Broadcast on a channel
@@ -43,6 +43,7 @@ export type InputMessage =
   | { t: "move"; dir: -1 | 0 | 1 }
   | { t: "punch" }
   | { t: "kick" }
+  | { t: "throw" }
   | { t: "block"; on: boolean }
   | { t: "crouch"; on: boolean }
   | { t: "jump" }
@@ -92,6 +93,12 @@ interface StateSnapshot {
   screenShake: number;
   projectiles: { id: number; side: "player" | "opponent"; characterId: string; x: number; dir: 1 | -1; damage: number }[];
   comboCallout: { label: string; side: "player" | "opponent"; token: number } | null;
+  // See FinisherInfo in lib/store.ts — the joiner mirrors the host's
+  // finisher cutscene the same way it mirrors everything else, it just
+  // never calls resolveFinisher() itself (see FightScreen.tsx); the
+  // host's own eventual phase:"result" broadcast is what ends it for both
+  // sides in sync.
+  finisher: FinisherInfo | null;
 }
 
 let activeChannel: RealtimeChannel | null = null;
@@ -138,6 +145,9 @@ function applyInput(msg: InputMessage) {
     case "kick":
       s.kick2();
       break;
+    case "throw":
+      s.throw2();
+      break;
     case "block":
       s.setBlocking2(msg.on);
       break;
@@ -179,6 +189,7 @@ function applyState(snap: StateSnapshot) {
     screenShake: snap.screenShake,
     projectiles: snap.projectiles,
     comboCallout: snap.comboCallout,
+    finisher: snap.finisher,
   });
 }
 
@@ -226,6 +237,7 @@ export function startHosting(code: string, onPeerJoined: () => void, onPeerLeft:
       screenShake: s.screenShake,
       projectiles: s.projectiles,
       comboCallout: s.comboCallout,
+      finisher: s.finisher,
     };
     channel.send({ type: "broadcast", event: "state", payload: snap });
   }, 50);

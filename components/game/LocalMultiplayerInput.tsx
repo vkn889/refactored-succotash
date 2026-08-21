@@ -17,15 +17,16 @@ const P2_CROUCH = new Set(["KeyS"]);
 const P2_JUMP = new Set(["KeyW"]);
 
 const HANDLED = new Set([
-  "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Slash", "Quote", "ShiftRight", "Enter",
-  "KeyA", "KeyD", "KeyW", "KeyS", "KeyF", "KeyG", "ShiftLeft", "KeyE",
+  "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Slash", "Quote", "ShiftRight", "Enter", "Backslash",
+  "KeyA", "KeyD", "KeyW", "KeyS", "KeyF", "KeyG", "ShiftLeft", "KeyE", "KeyR",
 ]);
 
 /** Local same-keyboard 2-player controls — replaces PlayerInput2D entirely
  * while `localMultiplayer` is active (see FightScreen). P1 = arrows +
- * Slash/Quote/ShiftRight/Enter (punch/kick/block/special). P2 = WASD +
- * F/G/ShiftLeft/E (punch/kick/block/special). Mouse click stays P1-only
- * (see PlayerInput2D's comment) since a shared mouse can't serve both. */
+ * Slash/Quote/ShiftRight/Enter/Backslash (punch/kick/block/special/throw).
+ * P2 = WASD + F/G/ShiftLeft/E/R (punch/kick/block/special/throw). Mouse
+ * click stays P1-only (see PlayerInput2D's comment) since a shared mouse
+ * can't serve both. */
 export default function LocalMultiplayerInput() {
   const held = useRef(new Set<string>());
 
@@ -49,6 +50,9 @@ export default function LocalMultiplayerInput() {
         case "Enter":
           s.special();
           break;
+        case "Backslash":
+          s.throwAttack();
+          break;
         case "KeyF":
           s.punch2();
           break;
@@ -60,6 +64,9 @@ export default function LocalMultiplayerInput() {
           break;
         case "KeyE":
           s.special2();
+          break;
+        case "KeyR":
+          s.throw2();
           break;
       }
       if (P1_JUMP.has(e.code)) s.jump();

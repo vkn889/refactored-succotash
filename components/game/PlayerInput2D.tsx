@@ -9,14 +9,17 @@ const KEY_CROUCH = new Set(["KeyS", "ArrowDown"]);
 const KEY_JUMP = new Set(["KeyW", "ArrowUp", "Space"]);
 const HANDLED = new Set([
   "KeyA", "KeyD", "KeyS", "KeyW", "ArrowLeft", "ArrowRight", "ArrowDown", "ArrowUp",
-  "Space", "KeyJ", "KeyK", "KeyL", "KeyU",
+  "Space", "KeyJ", "KeyK", "KeyL", "KeyU", "KeyI",
 ]);
 
 /** Keyboard + mouse 2D fighting-game controls — no pointer-lock needed now
  * that there's no free camera to look around with (see CameraRig's old
  * job, gone entirely). Movement keys are read every animation frame (held
- * down = keep walking); attack/block/special/jump fire once per keydown.
- * Left/right mouse click punch/kick as an alternative to J/K. */
+ * down = keep walking); attack/block/special/jump/throw fire once per
+ * keydown. Left/right mouse click punch/kick as an alternative to J/K. I
+ * throws — shorter range and slower recovery than a punch/kick, but
+ * ignores block entirely, so it's the real answer to a turtling opponent
+ * (see THROW in lib/combat.ts). */
 export default function PlayerInput2D() {
   const held = useRef(new Set<string>());
 
@@ -39,6 +42,9 @@ export default function PlayerInput2D() {
           break;
         case "KeyU":
           s.special();
+          break;
+        case "KeyI":
+          s.throwAttack();
           break;
       }
       if (KEY_JUMP.has(e.code)) s.jump();
