@@ -123,13 +123,14 @@ function applyInput(msg: InputMessage) {
   const s = useGameStore.getState();
   switch (msg.t) {
     case "move":
-      // move2 is a per-frame "still holding this direction" action, not an
-      // edge-triggered one — a single relayed message only nudges the
-      // fighter for one instant, which reads as slightly stuttery over
-      // the network compared to a local key held every frame. Scaling the
-      // per-message dt up compensates without needing a continuous stream
-      // of move messages (see OnlineJoinerInput's send rate).
-      if (msg.dir !== 0) s.move2(msg.dir, 0.05);
+      // Records the joiner's currently-held direction rather than nudging
+      // the fighter once right here — tick() (lib/store.ts) applies it
+      // continuously every host frame with the host's own real dt, the
+      // same way a local second keyboard's movement gets applied, instead
+      // of moving the fighter in one instant lump each time a message
+      // happens to arrive (see joinerMoveDir's own comment for why that
+      // used to read as visibly steppy motion).
+      s.setJoinerMoveDir(msg.dir);
       break;
     case "punch":
       s.punch2();
@@ -268,4 +269,7 @@ export function stopOnline() {
     activeChannel = null;
     activeRole = null;
   }
+  // Defensive: if the joiner disconnected mid-swing, don't leave the host
+  // stuck applying a stale held direction forever (see joinerMoveDir).
+  useGameStore.getState().setJoinerMoveDir(0);
 }

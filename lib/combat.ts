@@ -36,8 +36,15 @@ export type Stance = "stand" | "crouch" | "air";
 export const RANGE = {
   reach: 1.35, // baseline melee reach — standing punch/kick, and the AI's own "am I in melee" distance check
   specialReach: 1.6, // close-range (non-projectile) specials get a little extra
-  moveSpeed: 5.2, // units/sec — faster than the old fixed-camera stage's 3.4, so crossing the bigger arena doesn't feel sluggish
-  aiSpeed: 4.4,
+  // units/sec — faster than the old fixed-camera stage's 3.4, so crossing
+  // the bigger arena doesn't feel sluggish. The AI opponent, local
+  // multiplayer's P2, and an online joiner's fighter all move at this same
+  // speed as the player — there used to be a separate, slower `aiSpeed`
+  // (4.4) just for the AI, which desynced its run-cycle animation from its
+  // actual ground speed (the walk animation's stride was authored/tuned
+  // against this speed) and read as a jerky, "off" run compared to the
+  // player's own movement. One speed for every side, no exceptions.
+  moveSpeed: 5.2,
 };
 
 export const JUMP = {

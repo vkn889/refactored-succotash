@@ -140,6 +140,20 @@ interface GameState {
   // read. Only meaningful for the host; the joiner never reads it.
   onlinePeerCharacterId: string | null;
   setOnlinePeerCharacterId: (id: string | null) => void;
+  // The joiner's CURRENTLY HELD movement direction (-1/0/1), reported
+  // whenever it changes over the "move" input message (see
+  // OnlineJoinerInput.tsx — edge-triggered, not a periodic nudge) and
+  // applied continuously every host tick in tick() below, exactly the way
+  // the player's own held-key movement gets applied every frame by
+  // PlayerInput2D and local-multiplayer's P2 movement gets applied every
+  // frame by LocalMultiplayerInput. Before this, the joiner's fighter only
+  // moved in discrete ~50ms chunks applied instantly on message receipt,
+  // which read as visibly steppy/jagged compared to every other fighter's
+  // continuous per-frame motion — one movement mechanism for every side
+  // now, online or not. Only meaningful for the host; the joiner's own
+  // local copy of this field is never read (see applyState).
+  joinerMoveDir: -1 | 0 | 1;
+  setJoinerMoveDir: (dir: -1 | 0 | 1) => void;
 
   // --- story mode ---
   storyActive: boolean;
@@ -296,11 +310,13 @@ export const useGameStore = create<GameState>((set, get) => ({
   onlineRole: null,
   onlineCode: null,
   // A fresh role assignment (new hosting/joining session) always starts
-  // with no peer pick reported yet, even if a previous online session left
-  // a stale id sitting around.
-  setOnlineRole: (role, code = null) => set({ onlineRole: role, onlineCode: code, onlinePeerCharacterId: null }),
+  // with no peer pick reported yet and no stale held direction, even if a
+  // previous online session left one sitting around.
+  setOnlineRole: (role, code = null) => set({ onlineRole: role, onlineCode: code, onlinePeerCharacterId: null, joinerMoveDir: 0 }),
   onlinePeerCharacterId: null,
   setOnlinePeerCharacterId: (id) => set({ onlinePeerCharacterId: id }),
+  joinerMoveDir: 0,
+  setJoinerMoveDir: (dir) => set({ joinerMoveDir: dir }),
 
   storyActive: false,
   storyIndex: 0,
@@ -657,8 +673,19 @@ export const useGameStore = create<GameState>((set, get) => ({
     stepProjectiles(set, get, dtMs);
     // A human at the keyboard controls the opponent side directly in local
     // multiplayer (see punch2/kick2/move2/etc. above) — AI would otherwise
-    // fight the second player for control of the same fighter.
+    // fight the second player for control of the same fighter. An online
+    // host is ALSO localMultiplayer:true for this same AI-off reason (see
+    // FightScreen's input-selection comment) but has no local second
+    // keyboard — its "P2" is the joiner, whose currently-held direction
+    // (see joinerMoveDir/setJoinerMoveDir) gets applied right here, every
+    // tick, with the host's own real per-frame dt — exactly the same
+    // continuous-per-frame mechanism a local second keyboard's own move2()
+    // calls already use, instead of the old approach of applying the
+    // joiner's periodic network messages as isolated instant chunks (which
+    // read as visibly steppy motion for the opponent, on both the host's
+    // screen and the joiner's own mirrored view of it).
     if (!s.localMultiplayer) runAI(set, get, dtMs);
+    else if (s.onlineRole === "host" && s.joinerMoveDir !== 0) get().move2(s.joinerMoveDir, dt);
   },
 }));
 
@@ -1018,7 +1045,7 @@ function runAI(set: SetFn, get: GetFn, dtMs: number) {
   if (aggressive) {
     if (dNow > RANGE.reach && (s.opponent.action === "idle" || s.opponent.action === "walk")) {
       const toward = Math.sign(s.playerX - s.opponentX) || 1;
-      const speed = RANGE.aiSpeed * 1.2 * (dtMs / 1000);
+      const speed = RANGE.moveSpeed * 1.2 * (dtMs / 1000);
       const nextX = resolveMoveX(s.opponentX + toward * speed, s.playerX);
       set({ opponentX: nextX, opponent: { ...get().opponent, action: "walk" } });
     }
@@ -1044,7 +1071,7 @@ function runAI(set: SetFn, get: GetFn, dtMs: number) {
       }
     }
     if (aiMoveDir !== 0 && (s.opponent.action === "idle" || s.opponent.action === "walk")) {
-      const speed = RANGE.aiSpeed * (dtMs / 1000);
+      const speed = RANGE.moveSpeed * (dtMs / 1000);
       const nextX = resolveMoveX(s.opponentX + aiMoveDir * speed, s.playerX);
       set({ opponentX: nextX, opponent: { ...get().opponent, action: "walk" } });
     }

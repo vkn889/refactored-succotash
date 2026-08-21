@@ -14,12 +14,16 @@ const HANDLED = new Set(["KeyA", "KeyD", "KeyS", "KeyW", "ArrowLeft", "ArrowRigh
  * single-player (PlayerInput2D), but every action sends a message over
  * the realtime channel instead of calling a local store action: the
  * joiner's local store never runs its own simulation, it's a pure mirror
- * of whatever the host broadcasts (see lib/online.ts). Movement is sent
- * as a steady stream of "move" messages while held, at a fixed rate, so
- * the host's move2() sees the same "still holding this direction" shape
- * a local second keyboard would produce. */
+ * of whatever the host broadcasts (see lib/online.ts). Movement sends one
+ * "move" message only when the held direction actually CHANGES (down,
+ * release, or flip) — the host then applies that direction continuously
+ * every one of ITS OWN frames (see joinerMoveDir in lib/store.ts) instead
+ * of this side pushing periodic distance nudges that got applied as
+ * isolated instant jumps, which is what used to make the joiner's fighter
+ * visibly steppy for both players. */
 export default function OnlineJoinerInput() {
   const held = useRef(new Set<string>());
+  const lastDir = useRef<-1 | 0 | 1>(0);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -53,17 +57,19 @@ export default function OnlineJoinerInput() {
     window.addEventListener("keyup", onKeyUp);
 
     let raf: number;
-    let lastSend = 0;
-    const loop = (t: number) => {
-      if (useGameStore.getState().phase === "fight" && t - lastSend > 50) {
-        lastSend = t;
+    const loop = () => {
+      if (useGameStore.getState().phase === "fight") {
         let left = false;
         let right = false;
         held.current.forEach((k) => {
           if (KEY_LEFT.has(k)) left = true;
           if (KEY_RIGHT.has(k)) right = true;
         });
-        if (left !== right) sendInput({ t: "move", dir: left ? -1 : 1 });
+        const dir: -1 | 0 | 1 = left !== right ? (left ? -1 : 1) : 0;
+        if (dir !== lastDir.current) {
+          lastDir.current = dir;
+          sendInput({ t: "move", dir });
+        }
       }
       raf = requestAnimationFrame(loop);
     };
