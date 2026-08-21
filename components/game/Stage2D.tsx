@@ -4,14 +4,18 @@ import { useEffect, useRef } from "react";
 import { useGameStore } from "@/lib/store";
 import { getCharacter, STAGE } from "@/lib/combat";
 import { ARENAS } from "@/lib/arenas";
-import { computePose, drawFighter, drawBoss, type FighterColors } from "@/lib/sprite2d";
+import { drawFighter, drawBoss, drawBossAura, type FighterColors } from "@/lib/sprite2d";
+import { selectSprite } from "@/lib/spriteAtlas";
 
-// Fixed low internal resolution, scaled up via CSS with nearest-neighbor
-// filtering — the actual technique behind "chunky pixel" look here, since
-// every shape is vector-drawn rather than a real bitmap sprite (see
-// lib/sprite2d.ts's top comment).
-const W = 384;
-const H = 216;
+// Fixed internal resolution, scaled up via CSS. Bumped 1.5x from the
+// original 384×216 and switched off nearest-neighbor upscaling (see the
+// canvas's imageRendering below) — every shape here is vector-drawn (see
+// lib/sprite2d.ts's top comment) rather than a real bitmap sprite, so more
+// backing-store pixels plus a smooth upscale reads as sharper/more detailed
+// character art instead of the harsher chunky-block look the original
+// resolution + nearest-neighbor combination produced.
+const W = 576;
+const H = 324;
 const GROUND_Y = H * 0.82;
 const FIGHTER_H = H * 0.27; // smaller relative to the arena now that it's much bigger
 
@@ -42,7 +46,8 @@ export default function Stage2D() {
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    ctx.imageSmoothingEnabled = false;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
 
     let raf: number;
     let last = performance.now();
@@ -61,7 +66,7 @@ export default function Stage2D() {
       ref={canvasRef}
       width={W}
       height={H}
-      style={{ position: "absolute", inset: 0, width: "100%", height: "100%", imageRendering: "pixelated" }}
+      style={{ position: "absolute", inset: 0, width: "100%", height: "100%", imageRendering: "auto" }}
     />
   );
 }
@@ -90,23 +95,33 @@ function draw(ctx: CanvasRenderingContext2D, t: number, dt: number, cameraXRef: 
 
   drawBackground(ctx, arena, t, cam);
 
-  const pPose = computePose(s.player.action, s.player.actionTimer, s.player.actionTotal, s.playerY > 0.02, t);
-  const oPose = computePose(s.opponent.action, s.opponent.actionTimer, s.opponent.actionTotal, s.opponentY > 0.02, t);
+  const pSel = selectSprite(s.player.action, s.player.actionTimer, s.player.actionTotal, s.playerY > 0.02, t, s.player.attackStance);
+  const oSel = selectSprite(s.opponent.action, s.opponent.actionTimer, s.opponent.actionTotal, s.opponentY > 0.02, t, s.opponent.attackStance);
   const pFacing = s.playerX <= s.opponentX ? 1 : -1;
   const oFacing = s.opponentX <= s.playerX ? 1 : -1;
 
   const fighters = [
-    { x: s.playerX, y: s.playerY, pose: pPose, facing: pFacing as 1 | -1, char: pChar },
-    { x: s.opponentX, y: s.opponentY, pose: oPose, facing: oFacing as 1 | -1, char: oChar },
+    { x: s.playerX, y: s.playerY, sel: pSel, facing: pFacing as 1 | -1, char: pChar, health: s.player.health, maxHealth: s.player.maxHealth },
+    { x: s.opponentX, y: s.opponentY, sel: oSel, facing: oFacing as 1 | -1, char: oChar, health: s.opponent.health, maxHealth: s.opponent.maxHealth },
   ].sort((a, b) => a.x - b.x);
 
   for (const f of fighters) {
     const originX = worldToCanvasX(f.x, cam);
     const liftPx = f.y * FIGHTER_H * 0.55;
     if (f.char.useBossModel) {
-      drawBoss(ctx, f.pose, f.char.colors, originX, GROUND_Y - liftPx, FIGHTER_H, t);
+      // Real boss phase, not just flavor: the crystal core visibly speeds
+      // up and brightens as its health drops, so the back half of the
+      // Overmog fight LOOKS more dangerous, not just deals more damage.
+      const intensity = 1 - f.health / f.maxHealth;
+      drawBoss(ctx, f.sel.glow, f.char.colors, originX, GROUND_Y - liftPx, FIGHTER_H, t, intensity);
     } else {
-      drawFighter(ctx, f.pose, f.char.colors, f.char.accessory, f.char.id, originX, GROUND_Y, FIGHTER_H, f.facing, liftPx);
+      // Viraat (isStoryBoss) keeps the normal humanoid sprite but gets a
+      // permanent void aura + slightly bigger presence for the whole
+      // fight — see drawBossAura's own comment for why this stays a
+      // purely visual scale bump, never touching hitbox/reach math.
+      const bossScale = f.char.isStoryBoss ? 1.18 : 1;
+      if (f.char.isStoryBoss) drawBossAura(ctx, f.char.colors, originX, GROUND_Y, FIGHTER_H * bossScale, t);
+      drawFighter(ctx, f.sel, f.char.colors, f.char.id, originX, GROUND_Y, FIGHTER_H * bossScale, f.facing, liftPx);
     }
   }
 

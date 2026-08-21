@@ -24,8 +24,17 @@ export const STAGE = {
 
 export type AttackKind = "punch" | "kick";
 
+/** Which stance a punch/kick was thrown from — the same button reads
+ * differently depending on what the fighter is already doing, like a real
+ * fighting game: a standing kick, a crouching sweep, and a jump-in kick are
+ * three genuinely different moves (reach/damage/hitstun/recovery), not one
+ * animation recolored three ways. Derived automatically from the fighter's
+ * current crouch/airborne state at the moment the button is pressed — no
+ * new input bindings needed. */
+export type Stance = "stand" | "crouch" | "air";
+
 export const RANGE = {
-  reach: 1.35, // melee reach for both punch and kick — forgiving, Minecraft-attack-range style
+  reach: 1.35, // baseline melee reach — standing punch/kick, and the AI's own "am I in melee" distance check
   specialReach: 1.6, // close-range (non-projectile) specials get a little extra
   moveSpeed: 5.2, // units/sec — faster than the old fixed-camera stage's 3.4, so crossing the bigger arena doesn't feel sluggish
   aiSpeed: 4.4,
@@ -33,15 +42,30 @@ export const RANGE = {
 
 export const JUMP = {
   velocity: 5.2,
+  doubleJumpVelocity: 4.4, // the air-jump reads as a snappier second "flip" rather than matching the first jump's full arc
   gravity: 15,
 };
 
-/** Shared base punch/kick damage — per-character feel comes from
- * BUILD_POWER below (reusing each character's existing `build`), not a
- * second set of per-character numbers to maintain. */
-export const ATTACK: Record<AttackKind, { damage: number; meterGain: number }> = {
-  punch: { damage: 14, meterGain: 4 },
-  kick: { damage: 24, meterGain: 7 },
+/** Per-(kind, stance) attack data — damage/meter/reach/hitstun plus the raw
+ * windup/active/recovery frames (scaled by BUILD_POWER's speed below). A
+ * crouching kick is a long-reaching sweep with heavy hitstun but a slow,
+ * punishable recovery; a jump kick trades a long committal windup for the
+ * biggest damage and hitstun of any normal attack — the classic fighting-
+ * game risk/reward shape. Crouching/aerial punches are quicker, lighter
+ * pokes instead. Per-character feel still comes entirely from BUILD_POWER
+ * (reusing each character's existing `build`), not a second per-character
+ * table. */
+export const ATTACKS: Record<AttackKind, Record<Stance, { damage: number; meterGain: number; reach: number; hitstun: number; windup: number; active: number; recovery: number }>> = {
+  punch: {
+    stand: { damage: 14, meterGain: 4, reach: 1.35, hitstun: 200, windup: 60, active: 70, recovery: 90 },
+    crouch: { damage: 12, meterGain: 4, reach: 1.3, hitstun: 190, windup: 50, active: 60, recovery: 80 }, // quick low jab
+    air: { damage: 15, meterGain: 5, reach: 1.45, hitstun: 230, windup: 90, active: 90, recovery: 130 }, // aerial jab
+  },
+  kick: {
+    stand: { damage: 24, meterGain: 7, reach: 1.35, hitstun: 340, windup: 110, active: 90, recovery: 170 },
+    crouch: { damage: 20, meterGain: 7, reach: 1.7, hitstun: 420, windup: 140, active: 100, recovery: 200 }, // sweeping low kick — long reach, big hitstun, slow to recover from if it whiffs
+    air: { damage: 30, meterGain: 9, reach: 1.6, hitstun: 460, windup: 100, active: 110, recovery: 180 }, // jump kick — the flashiest, highest-payoff normal in the game
+  },
 };
 
 /** Bulkier builds hit harder and slower; slimmer builds hit lighter and
@@ -56,13 +80,34 @@ export const BUILD_POWER: Record<Build, { damage: number; speed: number }> = {
 };
 
 export const TIMING = {
-  punch: { windup: 60, active: 70, recovery: 90 },
-  kick: { windup: 110, active: 90, recovery: 170 },
-  hitstun_punch: 200,
-  hitstun_kick: 340,
   specialWindup: 500,
   cooldown: 550,
+  specialHitstun: 340, // flat, independent of the punch/kick stance tables above
 };
+
+/** Everything resolveAttack (lib/store.ts) needs for one thrown punch/kick,
+ * already scaled by the attacker's build — computed once at the moment the
+ * attack is thrown and reused for both the animation timer and the hit
+ * resolution a moment later, so the two can never disagree with each other. */
+export interface AttackProfile {
+  damage: number;
+  meterGain: number;
+  reach: number;
+  hitstun: number;
+  totalMs: number;
+}
+
+export function getAttackMove(characterId: string, kind: AttackKind, stance: Stance): AttackProfile {
+  const base = ATTACKS[kind][stance];
+  const power = BUILD_POWER[getCharacter(characterId).build];
+  return {
+    damage: Math.round(base.damage * power.damage),
+    meterGain: base.meterGain,
+    reach: base.reach,
+    hitstun: base.hitstun,
+    totalMs: Math.round((base.windup + base.active + base.recovery) / power.speed),
+  };
+}
 
 /** Traveling projectile specials — see fireSpecial in lib/store.ts. */
 export const PROJECTILE = {
@@ -70,12 +115,30 @@ export const PROJECTILE = {
   hitRadius: 0.55,
 };
 
-// The AI opponent always faces the player and never whiffs a decision the
-// way a badly-aimed human might — incoming AI damage is scaled down to
-// compensate, same idea as the old 3D version's gun-accuracy asymmetry,
-// just carried over as a flat difficulty knob now that there's no aiming
-// at all on either side. Player's own damage output is untouched.
-export const AI_DAMAGE_SCALE = 0.7;
+/** Named 3-hit combo strings — punch/kick sequences that, thrown in order
+ * within COMBO_WINDOW_MS of each other and each one actually connecting
+ * (see resolveAttack in lib/store.ts), turn the 3rd hit into a bonus
+ * "finisher": extra damage/meter plus a bigger hit-stop/screen-shake
+ * flourish and an on-screen callout. Available to BOTH sides through the
+ * same shared resolveAttack call site — the AI throws these too (see
+ * runAI), not just a player-only flourish. Kept to kind-only sequences
+ * (not stance-specific) so a player doesn't have to think about crouch/air
+ * state to land one, just the rhythm of the buttons. */
+export interface ComboDef {
+  id: string;
+  label: string; // HUD callout, e.g. "RUSH COMBO!"
+  sequence: AttackKind[];
+  damageMult: number; // applied to the finishing hit only
+  meterMult: number;
+}
+
+export const COMBOS: ComboDef[] = [
+  { id: "rush", label: "RUSH COMBO!", sequence: ["punch", "punch", "kick"], damageMult: 1.5, meterMult: 1.6 },
+  { id: "overhead", label: "OVERHEAD SMASH!", sequence: ["kick", "kick", "punch"], damageMult: 1.6, meterMult: 1.6 },
+  { id: "flurry", label: "FLURRY FINISH!", sequence: ["punch", "kick", "punch"], damageMult: 1.55, meterMult: 1.6 },
+];
+
+export const COMBO_WINDOW_MS = 700; // max gap between consecutive connecting hits for them to still chain
 
 export function getCharacter(id: string): CharacterConfig {
   const c = CHARACTERS[id];
@@ -87,18 +150,18 @@ export function getSpecial(characterId: string): MoveConfig {
   return getCharacter(characterId).moves.special;
 }
 
-/** Damage + meter gain for a punch/kick, scaled by the character's build. */
-export function getAttackMove(characterId: string, kind: AttackKind) {
-  const base = ATTACK[kind];
-  const power = BUILD_POWER[getCharacter(characterId).build];
-  return { damage: Math.round(base.damage * power.damage), meterGain: base.meterGain };
-}
-
 /** Damage actually applied after block mitigation (chip damage still gets
- * through) and, for AI attacks specifically, the difficulty scale above. */
-export function resolveDamage(rawDamage: number, defenderBlocking: boolean, attackerIsAI = false): number {
+ * through) and, for a genuinely AI-controlled attacker only, the current
+ * difficulty tier's damage scale (see lib/difficulty.ts) — the AI opponent
+ * always faces the player and never whiffs a decision the way a badly-aimed
+ * human might, so incoming AI damage is scaled to compensate, same idea as
+ * the old 3D version's gun-accuracy asymmetry. `aiDamageScale` is `null`
+ * for a human attacker (the player, local-multiplayer P2, or an online
+ * joiner) — those always deal full damage regardless of which "side" of
+ * the store they happen to occupy. */
+export function resolveDamage(rawDamage: number, defenderBlocking: boolean, aiDamageScale: number | null = null): number {
   const mitigated = defenderBlocking ? rawDamage * 0.18 : rawDamage;
-  return Math.round(attackerIsAI ? mitigated * AI_DAMAGE_SCALE : mitigated);
+  return Math.round(aiDamageScale != null ? mitigated * aiDamageScale : mitigated);
 }
 
 export function meterAfterHit(current: number, gain: number): number {

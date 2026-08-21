@@ -125,3 +125,25 @@ canvas {
 .ko-flash {
   animation: stinger-slam 1400ms ease-out;
 }
+.combo-flash {
+  animation: stinger-slam 700ms ease-out;
+}
+.boss-flash {
+  animation: stinger-slam 1300ms ease-out;
+}
+
+/* Slow orbiting shards for the story-mode boss reveal (BossReveal.tsx) —
+ * a full rotation every 14s, offset per-shard via animation-delay so a
+ * ring of them reads as independently drifting rather than one rigid
+ * spinning wheel. */
+@keyframes boss-orbit {
+  from {
+    transform: rotate(0deg) translateX(var(--orbit-r)) rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg) translateX(var(--orbit-r)) rotate(-360deg);
+  }
+}
+.boss-orbit-shard {
+  animation: boss-orbit 14s linear infinite;
+}

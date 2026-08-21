@@ -6,13 +6,17 @@ import { audio } from "@/lib/audio";
 import { LORE_INTRO, CLOSING_LINE } from "@/lib/lore";
 import { ROSTER } from "@/lib/characters";
 import { ARENAS } from "@/lib/arenas";
+import { DIFFICULTIES, DIFFICULTY_ORDER } from "@/lib/difficulty";
 
 export default function HomeScreen() {
   const goSelect = useGameStore((s) => s.goSelect);
   const goStoryIntro = useGameStore((s) => s.goStoryIntro);
   const goMultiplayerMenu = useGameStore((s) => s.goMultiplayerMenu);
+  const difficulty = useGameStore((s) => s.difficulty);
+  const setDifficulty = useGameStore((s) => s.setDifficulty);
   const [musicOn, setMusicOn] = useState(true);
   const [showLore, setShowLore] = useState(false);
+  const [showDifficulty, setShowDifficulty] = useState(false);
 
   useEffect(() => {
     // Howler auto-queues playback until the browser's first-gesture unlock
@@ -96,6 +100,10 @@ export default function HomeScreen() {
               >
                 {musicOn ? "♪ Music: On" : "Music: Off"}
               </button>
+              <span className="text-white/20">·</span>
+              <button onClick={() => setShowDifficulty(true)} className="hover:text-white/70">
+                Difficulty: {DIFFICULTIES[difficulty].label}
+              </button>
             </div>
           </div>
 
@@ -165,6 +173,53 @@ export default function HomeScreen() {
           Retro 2D anime combat · Web build · v1.0 MVP
         </div>
       </section>
+
+      {showDifficulty && (
+        <div
+          className="fixed inset-0 z-20 flex items-center justify-center bg-black/85 backdrop-blur-sm"
+          onClick={() => setShowDifficulty(false)}
+        >
+          <div
+            className="mx-4 w-full max-w-sm rounded-xl border border-white/10 bg-[#0a0a0f] p-6 text-left shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="text-xs uppercase tracking-[0.4em] text-orange-400/80">AI Difficulty</div>
+            <p className="mt-2 text-xs text-white/40">
+              Applies to every AI opponent — versus mode and story mode alike.
+            </p>
+            <div className="mt-4 flex flex-col gap-2">
+              {DIFFICULTY_ORDER.map((id) => {
+                const d = DIFFICULTIES[id];
+                const selected = id === difficulty;
+                return (
+                  <button
+                    key={id}
+                    onClick={() => {
+                      audio.playSfx("menu_select");
+                      setDifficulty(id);
+                    }}
+                    className={`rounded-lg border px-4 py-2.5 text-left transition-colors ${
+                      selected ? "border-orange-400/70 bg-orange-500/10" : "border-white/10 bg-white/[0.02] hover:border-white/25"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-[family-name:var(--font-display)] text-lg tracking-wide text-white">{d.label}</span>
+                      {selected && <span className="text-[10px] uppercase tracking-widest text-orange-400">Selected</span>}
+                    </div>
+                    <div className="mt-0.5 text-xs text-white/50">{d.description}</div>
+                  </button>
+                );
+              })}
+            </div>
+            <button
+              onClick={() => setShowDifficulty(false)}
+              className="mt-5 w-full rounded-lg border border-white/15 py-2.5 text-sm uppercase tracking-widest text-white/70 hover:bg-white/10"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
 
       {showLore && (
         <div

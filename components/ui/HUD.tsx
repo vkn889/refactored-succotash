@@ -30,6 +30,14 @@ export default function HUD() {
   const openTutorial = useGameStore((s) => s.openTutorial);
   const roundWins = useGameStore((s) => s.roundWins);
   const localMultiplayer = useGameStore((s) => s.localMultiplayer);
+  const onlineRole = useGameStore((s) => s.onlineRole);
+  const comboCallout = useGameStore((s) => s.comboCallout);
+  // localMultiplayer is also true for an online host (reused for the AI-off
+  // behavior it needed — see FightScreen's input-selection comment), but an
+  // online host only ever controls their own fighter with the single-player
+  // WASD scheme, not the two-keyboard-split one two people sharing a
+  // keyboard actually use.
+  const twoKeyboardSplit = localMultiplayer && !onlineRole;
 
   const pChar = getCharacter(playerId);
   const oChar = getCharacter(opponentId);
@@ -84,6 +92,23 @@ export default function HUD() {
         />
       </div>
 
+      {/* combo finisher callout — see COMBOS in lib/combat.ts. Keyed by
+          token so landing the same combo twice in a row still replays the
+          animation (a same-value comboCallout wouldn't otherwise remount). */}
+      {comboCallout && (
+        <div
+          key={comboCallout.token}
+          className="combo-flash pointer-events-none absolute left-1/2 top-[22%] -translate-x-1/2 text-center"
+        >
+          <div
+            className="font-[family-name:var(--font-display)] text-4xl italic tracking-wide text-white drop-shadow-[0_0_18px_rgba(255,180,60,0.7)]"
+            style={{ color: comboCallout.side === "player" ? pChar.colors.emissive : oChar.colors.emissive }}
+          >
+            {comboCallout.label}
+          </div>
+        </div>
+      )}
+
       {/* special-move subtitle */}
       {cinematicChar && specialSide && (
         <div className="absolute bottom-32 left-1/2 -translate-x-1/2 text-center">
@@ -100,7 +125,7 @@ export default function HUD() {
       {showHint && (
         <div className="absolute bottom-8 left-1/2 -translate-x-1/2 max-w-[280px] rounded-md border border-white/10 bg-black/50 p-3 text-center text-[11px] leading-relaxed text-white/70 backdrop-blur-sm">
           <div className="mb-1 font-bold text-white/90">CONTROLS</div>
-          {localMultiplayer ? (
+          {twoKeyboardSplit ? (
             <>
               P1: ← → move · ↑ jump · ↓ crouch · / punch · &apos; kick · Enter special
               <br />
@@ -108,11 +133,11 @@ export default function HUD() {
             </>
           ) : (
             <>
-              A / D move · W jump · S crouch
+              A / D move · W jump (W again = double jump) · S crouch
               <br />
-              J / click punch · K / right-click kick · L block (hold)
+              J / click punch · K / right-click kick · S+K sweep · W+K jump kick
               <br />
-              U special (meter full)
+              L block (hold) · U special (meter full)
             </>
           )}
         </div>

@@ -2,7 +2,8 @@
 
 import { useEffect, useRef } from "react";
 import { getCharacter } from "@/lib/combat";
-import { computePose, drawFighter, drawBoss } from "@/lib/sprite2d";
+import { drawFighter, drawBoss } from "@/lib/sprite2d";
+import { selectSprite } from "@/lib/spriteAtlas";
 import type { FighterFrame2D } from "@/lib/fighterFrame2d";
 
 /** Standalone single-fighter preview canvas — CharacterSelect and
@@ -34,7 +35,8 @@ export default function Fighter2D({
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    ctx.imageSmoothingEnabled = false;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
     const character = getCharacter(characterId);
 
     let raf: number;
@@ -45,12 +47,12 @@ export default function Fighter2D({
       const originY = canvas.height * 0.9;
       const heightPx = canvas.height * 0.74;
       const airborne = frame.y > 0.02;
-      const pose = computePose(frame.action, frame.actionTimer, frame.actionTotal, airborne, t);
+      const sel = selectSprite(frame.action, frame.actionTimer, frame.actionTotal, airborne, t, frame.attackStance ?? null);
       const liftPx = frame.y * heightPx * 0.55;
       if (character.useBossModel) {
-        drawBoss(ctx, pose, character.colors, originX, originY - liftPx, heightPx, t);
+        drawBoss(ctx, sel.glow, character.colors, originX, originY - liftPx, heightPx, t);
       } else {
-        drawFighter(ctx, pose, character.colors, character.accessory, characterId, originX, originY, heightPx, frame.facing, liftPx);
+        drawFighter(ctx, sel, character.colors, characterId, originX, originY, heightPx, frame.facing, liftPx);
       }
       raf = requestAnimationFrame(loop);
     };
@@ -61,10 +63,10 @@ export default function Fighter2D({
   return (
     <canvas
       ref={canvasRef}
-      width={220}
-      height={280}
+      width={330}
+      height={420}
       className={className}
-      style={{ imageRendering: "pixelated", width: "100%", height: "100%" }}
+      style={{ imageRendering: "auto", width: "100%", height: "100%" }}
     />
   );
 }

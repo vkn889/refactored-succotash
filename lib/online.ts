@@ -2,6 +2,7 @@
 
 import { createClient, type RealtimeChannel, type SupabaseClient } from "@supabase/supabase-js";
 import { useGameStore, type ActionState, type MatchPhase } from "./store";
+import type { Stance } from "./combat";
 
 // Online multiplayer transport: Supabase Realtime Broadcast on a channel
 // named by the join code. No database tables at all — broadcast messages
@@ -45,7 +46,13 @@ export type InputMessage =
   | { t: "block"; on: boolean }
   | { t: "crouch"; on: boolean }
   | { t: "jump" }
-  | { t: "special" };
+  | { t: "special" }
+  // Joiner → host only, sent from CharacterSelect once the joiner locks in
+  // their own fighter — see setOnlinePeerCharacterId. Not part of the
+  // regular gameplay input set above; it's handled the same way (over the
+  // "input" broadcast event) purely because that's already the joiner→host
+  // channel, not because it's a gameplay action.
+  | { t: "select"; characterId: string };
 
 interface FighterSnapshot {
   characterId: string;
@@ -56,6 +63,11 @@ interface FighterSnapshot {
   action: ActionState;
   actionTimer: number;
   actionTotal: number;
+  // Which stance (stand/crouch/air) the current punch/kick was thrown
+  // from — needed so the joiner's mirrored pose renders a crouch sweep or
+  // jump kick as itself instead of always falling back to the standing
+  // animation (see lib/sprite2d.ts's computePose).
+  attackStance: Stance | null;
   hitToken: number;
 }
 
@@ -79,6 +91,7 @@ interface StateSnapshot {
   matchOver: boolean;
   screenShake: number;
   projectiles: { id: number; side: "player" | "opponent"; characterId: string; x: number; dir: 1 | -1; damage: number }[];
+  comboCallout: { label: string; side: "player" | "opponent"; token: number } | null;
 }
 
 let activeChannel: RealtimeChannel | null = null;
@@ -99,6 +112,7 @@ function toFighterSnapshot(f: ReturnType<typeof useGameStore.getState>["player"]
     action: f.action,
     actionTimer: f.actionTimer,
     actionTotal: f.actionTotal,
+    attackStance: f.attackStance,
     hitToken: f.hitToken,
   };
 }
@@ -135,6 +149,9 @@ function applyInput(msg: InputMessage) {
     case "special":
       s.special2();
       break;
+    case "select":
+      s.setOnlinePeerCharacterId(msg.characterId);
+      break;
   }
 }
 
@@ -160,6 +177,7 @@ function applyState(snap: StateSnapshot) {
     matchOver: snap.matchOver,
     screenShake: snap.screenShake,
     projectiles: snap.projectiles,
+    comboCallout: snap.comboCallout,
   });
 }
 
@@ -206,6 +224,7 @@ export function startHosting(code: string, onPeerJoined: () => void, onPeerLeft:
       matchOver: s.matchOver,
       screenShake: s.screenShake,
       projectiles: s.projectiles,
+      comboCallout: s.comboCallout,
     };
     channel.send({ type: "broadcast", event: "state", payload: snap });
   }, 50);

@@ -1,17 +1,20 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useGameStore, type FighterRuntime } from "@/lib/store";
 import { getCharacter } from "@/lib/combat";
 import { audio } from "@/lib/audio";
 import { STORY_LADDER, isLastStoryFight } from "@/lib/story";
+import { STORY_DIALOGUE } from "@/lib/storyDialogue";
 import { CLOSING_LINE } from "@/lib/lore";
 import type { CharacterConfig } from "@/lib/types";
+import StoryCutscene from "./StoryCutscene";
 
 export default function ResultScreen() {
   const winner = useGameStore((s) => s.winner);
   const playerId = useGameStore((s) => s.playerId);
   const opponentId = useGameStore((s) => s.opponentId);
+  const arenaId = useGameStore((s) => s.arenaId);
   const player = useGameStore((s) => s.player);
   const opponent = useGameStore((s) => s.opponent);
   const restartMatch = useGameStore((s) => s.restartMatch);
@@ -25,6 +28,12 @@ export default function ResultScreen() {
   const roundWins = useGameStore((s) => s.roundWins);
   const roundNumber = useGameStore((s) => s.roundNumber);
   const nextRound = useGameStore((s) => s.nextRound);
+  // Gates the post-fight StoryCutscene (see below) — shown once, then this
+  // flips true and the real StoryResultScreen takes over. Local component
+  // state is fine here since ResultScreen only exists at all while
+  // phase === "result" (app/page.tsx), i.e. exactly the lifetime one
+  // result needs this to cover.
+  const [postDialogueShown, setPostDialogueShown] = useState(false);
 
   const pChar = getCharacter(playerId);
   const oChar = getCharacter(opponentId);
@@ -50,6 +59,26 @@ export default function ResultScreen() {
   }
 
   if (storyActive) {
+    // A real reaction to how the match just went — win or loss — before the
+    // result buttons, using the same dialogue engine the pre-fight scene
+    // uses. Regular ladder fights only wrote a `postWin` (a loss there just
+    // offers a retry, no extra beat); the two real bosses also have a
+    // `postLose` reaction, since losing to a boss should land differently
+    // than losing to a regular rung. A draw skips dialogue entirely — it's
+    // not a clean win or loss to react to.
+    const dialogue = STORY_DIALOGUE[opponentId];
+    const postLines = !draw ? (playerWon ? dialogue?.postWin : dialogue?.postLose) : undefined;
+    if (postLines && postLines.length > 0 && !postDialogueShown) {
+      return (
+        <StoryCutscene
+          lines={postLines}
+          playerId={playerId}
+          opponentId={opponentId}
+          arenaId={arenaId}
+          onDone={() => setPostDialogueShown(true)}
+        />
+      );
+    }
     return (
       <StoryResultScreen
         playerWon={playerWon}

@@ -6,6 +6,7 @@ import { ROSTER, CHARACTERS } from "@/lib/characters";
 import { ARENAS, ARENA_LIST } from "@/lib/arenas";
 import { BUILD_POWER } from "@/lib/combat";
 import { audio } from "@/lib/audio";
+import { sendInput, stopOnline } from "@/lib/online";
 import { type FighterFrame2D } from "@/lib/fighterFrame2d";
 import Fighter2D from "@/components/game/Fighter2D";
 
@@ -34,36 +35,66 @@ export default function CharacterSelect({ storyMode = false }: { storyMode?: boo
   const startMatch = useGameStore((s) => s.startMatch);
   const startStoryRun = useGameStore((s) => s.startStoryRun);
   const localMultiplayer = useGameStore((s) => s.localMultiplayer);
+  const onlineRole = useGameStore((s) => s.onlineRole);
+  const onlinePeerCharacterId = useGameStore((s) => s.onlinePeerCharacterId);
+
+  const isHost = onlineRole === "host";
+  const isJoiner = onlineRole === "joiner";
 
   const [step, setStep] = useState<Step>("fighter");
   const [playerId, setPlayerId] = useState("gautham");
   const [opponentId, setOpponentId] = useState(() => rollOpponent("gautham"));
   const [arenaId, setArenaId] = useState(CHARACTERS.gautham.arenaId);
   const [focusId, setFocusId] = useState<string | null>(null);
+  // Joiner-only: true once they've locked in a fighter and reported it to
+  // the host — from then on they just wait, since only the HOST ever picks
+  // the arena or actually starts the match (see lib/online.ts's top
+  // comment on host-authoritative design).
+  const [joinerReady, setJoinerReady] = useState(false);
+
+  // Backing out to Home from anywhere in an online session (either side)
+  // shouldn't leave the Realtime channel connected in the background — see
+  // the same discipline in OnlineLobbyScreen/FightScreen.
+  const leaveOnline = () => {
+    if (onlineRole) stopOnline();
+    goHome();
+  };
 
   useEffect(() => {
     audio.unlock();
     audio.playMusic("stageSelect");
   }, []);
 
+  // The host never free-picks the opponent's fighter online — whatever the
+  // joiner has reported over the network (see setOnlinePeerCharacterId)
+  // wins, right up until match start, falling back to the local
+  // `opponentId` state only for non-online flows (single-player/local MP).
+  const effectiveOpponentId = isHost ? (onlinePeerCharacterId ?? opponentId) : opponentId;
+
   // Story mode skips opponent/arena picking entirely — both are fixed by
   // the ladder (lib/story.ts) — so it never leaves the "fighter" step.
-  const effectiveStep = storyMode ? "fighter" : step;
+  // Online joiners likewise never see an "opponent"/"arena" step at all —
+  // they only ever pick their own fighter (see JoinerWaitingPanel below).
+  const effectiveStep = storyMode || isJoiner ? "fighter" : step;
+
+  if (isJoiner && joinerReady) {
+    return <JoinerWaitingPanel characterId={playerId} onChangeFighter={() => setJoinerReady(false)} onLeave={leaveOnline} />;
+  }
 
   return (
     <div className="flex h-dvh w-full flex-col overflow-hidden bg-black text-white">
       <header className="flex items-center justify-between px-6 py-4">
         <button
           onClick={() => {
-            if (storyMode || effectiveStep === "fighter") goHome();
+            if (storyMode || isJoiner || effectiveStep === "fighter") leaveOnline();
             else if (effectiveStep === "opponent") setStep("fighter");
             else setStep("opponent");
           }}
           className="text-xs uppercase tracking-widest text-white/40 hover:text-white/70"
         >
-          ← {storyMode || effectiveStep === "fighter" ? "Home" : "Back"}
+          ← {storyMode || isJoiner || effectiveStep === "fighter" ? "Home" : "Back"}
         </button>
-        {!storyMode && (
+        {!storyMode && !isJoiner && (
           <div className="flex items-center gap-2">
             {(["fighter", "opponent", "arena"] as Step[]).map((s, i) => (
               <div key={s} className="flex items-center gap-2">
@@ -78,23 +109,38 @@ export default function CharacterSelect({ storyMode = false }: { storyMode?: boo
         <h2 className="font-[family-name:var(--font-display)] text-xl tracking-widest text-white/90">
           {storyMode
             ? "Choose Your Story Fighter"
-            : effectiveStep === "fighter"
-              ? localMultiplayer
-                ? "Player 1 — Choose Your Fighter"
-                : "Choose Your Fighter"
-              : effectiveStep === "opponent"
-                ? localMultiplayer
-                  ? "Player 2 — Choose Your Fighter"
-                  : "Choose Your Opponent"
-                : "Choose Your Arena"}
+            : isJoiner
+              ? "Choose Your Fighter"
+              : effectiveStep === "fighter"
+                ? isHost
+                  ? "Choose Your Fighter"
+                  : localMultiplayer
+                    ? "Player 1 — Choose Your Fighter"
+                    : "Choose Your Fighter"
+                : effectiveStep === "opponent"
+                  ? isHost
+                    ? "Opponent"
+                    : localMultiplayer
+                      ? "Player 2 — Choose Your Fighter"
+                      : "Choose Your Opponent"
+                  : "Choose Your Arena"}
         </h2>
         <div className="w-16" />
       </header>
 
-      {effectiveStep !== "arena" ? (
+      {effectiveStep === "opponent" && isHost ? (
+        <HostWaitingStep
+          peerCharacterId={onlinePeerCharacterId}
+          onNext={() => {
+            audio.playSfx("menu_confirm");
+            setStep("arena");
+          }}
+        />
+      ) : effectiveStep !== "arena" ? (
         <FighterStep
           step={effectiveStep}
           storyMode={storyMode}
+          isOnline={isHost || isJoiner}
           playerId={playerId}
           opponentId={opponentId}
           focusId={focusId}
@@ -104,15 +150,23 @@ export default function CharacterSelect({ storyMode = false }: { storyMode?: boo
             if (effectiveStep === "fighter") {
               setPlayerId(id);
               setArenaId(CHARACTERS[id].arenaId);
-              if (opponentId === id) setOpponentId(rollOpponent(id));
+              if (!isHost && !isJoiner && opponentId === id) setOpponentId(rollOpponent(id));
             } else {
               setOpponentId(id);
             }
           }}
           onNext={() => {
             audio.playSfx("menu_confirm");
-            if (storyMode) startStoryRun(playerId);
-            else setStep(effectiveStep === "fighter" ? "opponent" : "arena");
+            if (storyMode) {
+              startStoryRun(playerId);
+            } else if (isJoiner) {
+              sendInput({ t: "select", characterId: playerId });
+              setJoinerReady(true);
+            } else if (isHost) {
+              setStep("opponent");
+            } else {
+              setStep(effectiveStep === "fighter" ? "opponent" : "arena");
+            }
           }}
         />
       ) : (
@@ -124,7 +178,7 @@ export default function CharacterSelect({ storyMode = false }: { storyMode?: boo
           }}
           onFight={() => {
             audio.playSfx("menu_confirm");
-            startMatch(playerId, opponentId, arenaId);
+            startMatch(playerId, effectiveOpponentId, arenaId);
           }}
         />
       )}
@@ -132,9 +186,91 @@ export default function CharacterSelect({ storyMode = false }: { storyMode?: boo
   );
 }
 
+/** Online host only — the "opponent" step doesn't let the host pick the
+ * peer's fighter (they only ever pick their own, same as the joiner does);
+ * it just shows whatever the joiner has reported so far, live. */
+function HostWaitingStep({
+  peerCharacterId,
+  onNext,
+}: {
+  peerCharacterId: string | null;
+  onNext: () => void;
+}) {
+  const preview = peerCharacterId ? CHARACTERS[peerCharacterId] : null;
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-6 px-6 pb-6 text-center">
+      {preview ? (
+        <>
+          <div className="relative h-56 w-56 overflow-hidden rounded-lg bg-black">
+            <Fighter2D characterId={preview.id} getFrame={() => IDLE_FRAME} />
+          </div>
+          <div>
+            <div className="text-xs uppercase tracking-[0.3em] text-white/40">Opponent locked in</div>
+            <div className="font-[family-name:var(--font-display)] text-3xl tracking-wide">{preview.name}</div>
+            <div className="text-xs uppercase tracking-widest" style={{ color: preview.colors.emissive }}>
+              {preview.title} · {preview.element}
+            </div>
+          </div>
+          <button
+            onClick={onNext}
+            className="arcade-panel arcade-panel-orange px-10 py-3 font-[family-name:var(--font-display)] text-xl tracking-widest shadow-[0_0_25px_rgba(255,90,30,0.35)] transition-transform hover:scale-[1.02] active:scale-95"
+          >
+            NEXT: ARENA
+          </button>
+        </>
+      ) : (
+        <div className="flex items-center gap-2 text-white/60">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-orange-400" />
+          Waiting for opponent to choose a fighter…
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Online joiner only — shown after they've locked in their own fighter.
+ * Only the host ever picks the arena or starts the match; applyState
+ * (lib/online.ts) flips this whole screen away automatically the moment
+ * the host actually does. */
+function JoinerWaitingPanel({
+  characterId,
+  onChangeFighter,
+  onLeave,
+}: {
+  characterId: string;
+  onChangeFighter: () => void;
+  onLeave: () => void;
+}) {
+  const char = CHARACTERS[characterId];
+  return (
+    <div className="flex h-dvh w-full flex-col items-center justify-center gap-6 bg-black px-6 text-center text-white">
+      <div className="relative h-56 w-56 overflow-hidden rounded-lg bg-black">
+        <Fighter2D characterId={char.id} getFrame={() => IDLE_FRAME} />
+      </div>
+      <div>
+        <div className="text-xs uppercase tracking-[0.3em] text-white/40">Locked in as</div>
+        <div className="font-[family-name:var(--font-display)] text-3xl tracking-wide">{char.name}</div>
+      </div>
+      <div className="flex items-center gap-2 text-white/60">
+        <span className="h-2 w-2 animate-pulse rounded-full bg-fuchsia-400" />
+        Waiting for host to choose the arena and start the match…
+      </div>
+      <div className="flex gap-4 text-xs uppercase tracking-widest text-white/40">
+        <button onClick={onChangeFighter} className="hover:text-white/70">
+          Change Fighter
+        </button>
+        <button onClick={onLeave} className="hover:text-white/70">
+          Leave Match
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function FighterStep({
   step,
   storyMode,
+  isOnline,
   playerId,
   opponentId,
   focusId,
@@ -144,6 +280,7 @@ function FighterStep({
 }: {
   step: "fighter" | "opponent";
   storyMode: boolean;
+  isOnline: boolean;
   playerId: string;
   opponentId: string;
   focusId: string | null;
@@ -152,7 +289,11 @@ function FighterStep({
   onNext: () => void;
 }) {
   const selectedId = step === "fighter" ? playerId : opponentId;
-  const excludedId = step === "fighter" ? null : playerId;
+  // Online, each side only ever picks their own fighter — there's no
+  // "opponent" step to exclude anyone from (see HostWaitingStep/
+  // JoinerWaitingPanel), and mirror matches are allowed since neither side
+  // can see the other's live pick to avoid it anyway.
+  const excludedId = isOnline || step === "fighter" ? null : playerId;
   const preview = CHARACTERS[focusId ?? selectedId];
   const arena = ARENAS[preview.arenaId];
 
@@ -221,7 +362,7 @@ function FighterStep({
           onClick={onNext}
           className="mt-auto arcade-panel arcade-panel-orange py-3 font-[family-name:var(--font-display)] text-xl tracking-widest shadow-[0_0_25px_rgba(255,90,30,0.35)] transition-transform hover:scale-[1.02] active:scale-95"
         >
-          {storyMode ? "BEGIN STORY" : step === "fighter" ? "NEXT: OPPONENT" : "NEXT: ARENA"}
+          {storyMode ? "BEGIN STORY" : isOnline ? "READY" : step === "fighter" ? "NEXT: OPPONENT" : "NEXT: ARENA"}
         </button>
       </div>
     </div>
